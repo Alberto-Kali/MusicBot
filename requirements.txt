@@ -1,0 +1,7 @@
+aiogram
+ytmusicapi
+yt-dlp
+mutagen            # для работы с метаданными MP3
+SQLAlchemy
+asyncpg
+aiosqlite
