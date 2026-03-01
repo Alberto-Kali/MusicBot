@@ -157,3 +157,60 @@ async def get_playlist_by_token(share_token: str) -> Playlist | None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Playlist).where(Playlist.share_token == share_token))
         return result.scalar_one_or_none()
+
+
+async def clone_playlist_to_user(source_playlist_id: int, target_user_id: int) -> Playlist | None:
+    async with AsyncSessionLocal() as session:
+        source_playlist = await session.get(Playlist, source_playlist_id)
+        if not source_playlist:
+            return None
+
+        copied_name = source_playlist.name
+        name_exists = await session.execute(
+            select(Playlist).where(Playlist.user_id == target_user_id, Playlist.name == copied_name)
+        )
+        if name_exists.scalar_one_or_none():
+            copied_name = f"{source_playlist.name} (копия)"
+
+        copied_playlist = Playlist(
+            user_id=target_user_id,
+            name=copied_name,
+            share_token=uuid4().hex,
+        )
+        session.add(copied_playlist)
+        await session.flush()
+
+        source_tracks = await session.execute(
+            select(PlaylistTrack.track_id).where(PlaylistTrack.playlist_id == source_playlist_id)
+        )
+        track_ids = source_tracks.scalars().all()
+        for track_id in track_ids:
+            session.add(PlaylistTrack(playlist_id=copied_playlist.id, track_id=track_id))
+
+        await session.commit()
+        await session.refresh(copied_playlist)
+        return copied_playlist
+
+
+async def add_tracks_to_library(user_id: int, track_ids: list[int]) -> tuple[int, int]:
+    if not track_ids:
+        return 0, 0
+
+    async with AsyncSessionLocal() as session:
+        existing_rows = await session.execute(
+            select(UserLibrary.track_id).where(
+                UserLibrary.user_id == user_id,
+                UserLibrary.track_id.in_(track_ids),
+            )
+        )
+        existing = set(existing_rows.scalars().all())
+
+        added = 0
+        for track_id in track_ids:
+            if track_id in existing:
+                continue
+            session.add(UserLibrary(user_id=user_id, track_id=track_id))
+            added += 1
+
+        await session.commit()
+        return added, len(track_ids)

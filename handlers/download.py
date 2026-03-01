@@ -3,7 +3,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.types import CallbackQuery, FSInputFile, InputMediaAudio
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from handlers.common import send_success_sticker
@@ -15,6 +15,7 @@ from lib.controldb import (
     get_user_library,
 )
 from lib.youtubectrl import download_audio_with_progress
+from lib.youtubectrl import get_track_info_by_video_id
 from utils.keyboards import main_menu_keyboard
 
 router = Router()
@@ -53,7 +54,7 @@ async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, vid
         audio_file,
         title=track_info["title"],
         performer=track_info["artist"],
-        thumb=thumb_file,
+        thumbnail=thumb_file,
         caption=f"{track_info['artist']} — {track_info['title']}",
     )
 
@@ -86,11 +87,123 @@ async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, vid
     await progress_msg.edit_text("Что делаем дальше?", reply_markup=builder.as_markup())
 
 
+async def send_track_to_private_chat(callback: CallbackQuery, video_id: str, use_media_audio: bool = False):
+    track = await get_track_by_video_id(video_id)
+    if track:
+        track_info = {
+            "videoId": video_id,
+            "title": track.title,
+            "artist": track.artist,
+            "thumbnail": track.thumbnail,
+            "duration": track.duration,
+        }
+    else:
+        track_info = await get_track_info_by_video_id(video_id)
+
+    progress_msg = await callback.bot.send_message(callback.from_user.id, "Загрузка: 0%")
+
+    async def update_progress(percent: int):
+        await progress_msg.edit_text(f"Загрузка: {percent}%")
+
+    mp3_path = None
+    thumb_path = None
+    try:
+        mp3_path, thumb_path = await download_audio_with_progress(
+            video_id,
+            track_info.get("thumbnail"),
+            update_progress,
+        )
+    except Exception as exc:
+        logger.exception("inline_download_failed video_id=%s error=%s", video_id, exc)
+        await progress_msg.edit_text(f"Ошибка при скачивании: {exc}")
+        return
+
+    audio_file = FSInputFile(mp3_path)
+    thumb_file = FSInputFile(thumb_path) if thumb_path and os.path.exists(thumb_path) else None
+
+    if use_media_audio:
+        media = InputMediaAudio(
+            media=audio_file,
+            thumbnail=thumb_file,
+            title=track_info["title"],
+            performer=track_info["artist"],
+            caption=f"{track_info['artist']} — {track_info['title']}",
+        )
+        await callback.bot.send_media_group(
+            callback.from_user.id,
+            media=[media],
+        )
+    else:
+        await callback.bot.send_audio(
+            callback.from_user.id,
+            audio_file,
+            title=track_info["title"],
+            performer=track_info["artist"],
+            thumbnail=thumb_file,
+            caption=f"{track_info['artist']} — {track_info['title']}",
+        )
+
+    if mp3_path and os.path.exists(mp3_path):
+        os.remove(mp3_path)
+    if thumb_path and os.path.exists(thumb_path):
+        os.remove(thumb_path)
+
+    db_track = await ensure_track(
+        {
+            "video_id": video_id,
+            "title": track_info["title"],
+            "artist": track_info["artist"],
+            "duration": track_info.get("duration"),
+            "thumbnail": track_info.get("thumbnail"),
+        }
+    )
+    user = await get_or_create_user(callback.from_user.id)
+    is_in_library = any(t.id == db_track.id for t in await get_user_library(user.id))
+
+    builder = InlineKeyboardBuilder()
+    if is_in_library:
+        builder.button(text="✅ Уже в библиотеке", callback_data="lib:already")
+    else:
+        builder.button(text="➕ Добавить в библиотеку", callback_data=f"lib:add:{db_track.id}")
+    builder.button(text="🏠 Главное меню", callback_data="menu:main")
+    builder.adjust(1)
+
+    await progress_msg.edit_text("Трек отправлен в личку.", reply_markup=builder.as_markup())
+
+
 @router.callback_query(F.data.startswith("track:"))
 async def process_track_callback(callback: CallbackQuery, state: FSMContext):
     video_id = callback.data.split(":", 1)[1]
     await callback.answer()
     await send_track_and_actions(callback, state, video_id)
+
+
+@router.callback_query(F.data.startswith("inline:dl:"))
+async def process_inline_download_callback(callback: CallbackQuery):
+    video_id = callback.data.split(":", 2)[2]
+    await callback.answer("Скачиваю и отправляю в личные сообщения...")
+    try:
+        await send_track_to_private_chat(callback, video_id)
+    except Exception as exc:
+        logger.exception("inline_send_private_failed video_id=%s error=%s", video_id, exc)
+        await callback.bot.send_message(
+            callback.from_user.id,
+            "Не удалось отправить трек. Откройте чат с ботом /start и попробуйте снова.",
+        )
+
+
+@router.callback_query(F.data.startswith("inline:dlm:"))
+async def process_inline_download_media_callback(callback: CallbackQuery):
+    video_id = callback.data.split(":", 2)[2]
+    await callback.answer("Пробую экспериментальную отправку...")
+    try:
+        await send_track_to_private_chat(callback, video_id, use_media_audio=True)
+    except Exception as exc:
+        logger.exception("inline_send_media_failed video_id=%s error=%s", video_id, exc)
+        await callback.bot.send_message(
+            callback.from_user.id,
+            "Экспериментальный режим не сработал. Откройте чат с ботом /start и попробуйте снова.",
+        )
 
 
 @router.callback_query(F.data == "lib:already")

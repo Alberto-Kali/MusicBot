@@ -247,6 +247,29 @@ async def search_tracks(query: str, limit: int = 5) -> list[dict]:
     return await loop.run_in_executor(None, search_tracks_sync, query, limit)
 
 
+def get_track_info_by_video_id_sync(video_id: str) -> dict:
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    ydl_opts = {
+        **_common_ydl_opts(),
+        "skip_download": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    return {
+        "videoId": video_id,
+        "title": info.get("title") or "Без названия",
+        "artist": info.get("uploader") or info.get("channel") or "Unknown",
+        "duration": info.get("duration"),
+        "thumbnail": info.get("thumbnail"),
+    }
+
+
+async def get_track_info_by_video_id(video_id: str) -> dict:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, get_track_info_by_video_id_sync, video_id)
+
+
 def download_audio(video_id: str, output_dir: str = "./tmp") -> str:
     format_id = get_best_audio_format(video_id)
     outtmpl = f"{output_dir}/%(title)s.%(ext)s"
