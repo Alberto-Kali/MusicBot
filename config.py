@@ -15,3 +15,9 @@ COOKIE_FILE = os.getenv("COOKIE_FILE", "./cookies.txt")
 # yt-dlp-ejs: JS runtime + remote EJS component для обхода anti-bot/challenge
 YTDLP_JS_RUNTIMES = os.getenv("YTDLP_JS_RUNTIMES", "deno:./include/deno")
 YTDLP_REMOTE_COMPONENTS = os.getenv("YTDLP_REMOTE_COMPONENTS", "ejs:github")
+
+# Встроенный медиа-сервер для InlineQueryResultAudio
+INLINE_MEDIA_DIR = os.getenv("INLINE_MEDIA_DIR", "./inline_media")
+INLINE_SERVER_HOST = os.getenv("INLINE_SERVER_HOST", "0.0.0.0")
+INLINE_SERVER_PORT = int(os.getenv("INLINE_SERVER_PORT", "8080"))
+INLINE_SERVER_DOMAIN = os.getenv("INLINE_SERVER_DOMAIN", "https://music.paradox39.ru")

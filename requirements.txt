@@ -8,3 +8,5 @@ aiosqlite
 aiohttp
 Pillow
 requests
+fastapi
+uvicorn

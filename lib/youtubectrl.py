@@ -11,7 +11,7 @@ from mutagen.id3 import APIC, ID3
 from PIL import Image
 from ytmusicapi import YTMusic
 
-from config import COOKIE_FILE, TEMP_DIR, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
+from config import COOKIE_FILE, INLINE_MEDIA_DIR, TEMP_DIR, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +268,41 @@ def get_track_info_by_video_id_sync(video_id: str) -> dict:
 async def get_track_info_by_video_id(video_id: str) -> dict:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, get_track_info_by_video_id_sync, video_id)
+
+
+def ensure_inline_mp3_sync(video_id: str) -> str:
+    """
+    Гарантирует наличие файла ./inline_media/<video_id>.mp3 и возвращает его путь.
+    """
+    os.makedirs(INLINE_MEDIA_DIR, exist_ok=True)
+    target_mp3 = os.path.join(INLINE_MEDIA_DIR, f"{video_id}.mp3")
+    if os.path.exists(target_mp3) and os.path.getsize(target_mp3) > 0:
+        logger.info("[YTDLP] inline_mp3_cached video_id=%s path=%s", video_id, target_mp3)
+        return target_mp3
+
+    format_id = get_best_audio_format(video_id)
+    outtmpl = os.path.join(INLINE_MEDIA_DIR, f"{video_id}.%(ext)s")
+    try:
+        mp3_path = _download_with_format(video_id, outtmpl, format_id)
+    except yt_dlp.utils.DownloadError as exc:
+        logger.warning("[YTDLP] inline_selected_format_failed video_id=%s format=%s err=%s", video_id, format_id, exc)
+        fallback = "bestaudio[acodec!=none]/best[acodec!=none]"
+        mp3_path = _download_with_format(video_id, outtmpl, fallback)
+
+    # На случай неожиданных имён после постпроцессора принудительно нормализуем.
+    if mp3_path != target_mp3 and os.path.exists(mp3_path):
+        os.replace(mp3_path, target_mp3)
+
+    if not os.path.exists(target_mp3):
+        raise RuntimeError("Не удалось подготовить mp3 для inline-отправки")
+
+    logger.info("[YTDLP] inline_mp3_ready video_id=%s path=%s", video_id, target_mp3)
+    return target_mp3
+
+
+async def ensure_inline_mp3(video_id: str) -> str:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, ensure_inline_mp3_sync, video_id)
 
 
 def download_audio(video_id: str, output_dir: str = "./tmp") -> str:
