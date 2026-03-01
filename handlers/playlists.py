@@ -5,7 +5,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import BOT_USERNAME
 from lib.controldb import (
+    add_tracks_to_library,
     add_track_to_playlist,
+    clone_playlist_to_user,
     create_playlist,
     delete_playlist,
     get_or_create_user,
@@ -255,6 +257,9 @@ async def show_shared_playlist(message: Message, token: str, current_user_id: in
 
     if playlist.user_id == current_user_id:
         builder.button(text="Открыть мой плейлист", callback_data=f"playlist:open:{playlist.id}")
+    else:
+        builder.button(text="➕ Добавить плейлист к себе", callback_data=f"share:add_playlist:{token}")
+        builder.button(text="📚 Добавить все треки в библиотеку", callback_data=f"share:add_lib:{token}")
     builder.button(text="🏠 Главное меню", callback_data="menu:main")
     builder.adjust(1)
 
@@ -262,3 +267,56 @@ async def show_shared_playlist(message: Message, token: str, current_user_id: in
         f"Открыт shared-плейлист: {playlist.name}\nТреков: {len(tracks)}",
         reply_markup=builder.as_markup(),
     )
+
+
+@router.callback_query(F.data.startswith("share:add_playlist:"))
+async def add_shared_playlist_to_user(callback: CallbackQuery):
+    token = callback.data.split(":", 2)[2]
+    playlist = await get_playlist_by_token(token)
+    if not playlist:
+        await callback.answer("Плейлист не найден", show_alert=True)
+        return
+
+    user = await get_or_create_user(callback.from_user.id)
+    if playlist.user_id == user.id:
+        await callback.answer("Это уже ваш плейлист", show_alert=True)
+        return
+
+    copied = await clone_playlist_to_user(playlist.id, user.id)
+    if not copied:
+        await callback.answer("Не удалось добавить плейлист", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Открыть плейлист", callback_data=f"playlist:open:{copied.id}")
+    builder.button(text="🧩 Мои плейлисты", callback_data="menu:playlists")
+    builder.button(text="🏠 Главное меню", callback_data="menu:main")
+    builder.adjust(1)
+    await callback.message.edit_text(
+        f"Плейлист «{copied.name}» добавлен в ваши плейлисты.",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("share:add_lib:"))
+async def add_shared_playlist_tracks_to_library(callback: CallbackQuery):
+    token = callback.data.split(":", 2)[2]
+    playlist = await get_playlist_by_token(token)
+    if not playlist:
+        await callback.answer("Плейлист не найден", show_alert=True)
+        return
+
+    tracks = await get_playlist_tracks(playlist.id)
+    user = await get_or_create_user(callback.from_user.id)
+    added, total = await add_tracks_to_library(user.id, [t.id for t in tracks])
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📚 Моя библиотека", callback_data="menu:library")
+    builder.button(text="🏠 Главное меню", callback_data="menu:main")
+    builder.adjust(1)
+    await callback.message.edit_text(
+        f"Добавлено в библиотеку: {added} из {total} треков.",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer("Готово")
