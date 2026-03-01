@@ -12,7 +12,10 @@ router = Router()
 def library_list_keyboard(tracks):
     builder = InlineKeyboardBuilder()
     for track in tracks[:50]:
-        builder.button(text=f"{track.artist} - {track.title}", callback_data=f"library:track:{track.id}")
+        builder.button(
+            text=f"{track.artist} - {track.title} | ID: {track.video_id}",
+            callback_data=f"library:track:{track.id}",
+        )
     builder.button(text="🏠 Главное меню", callback_data="menu:main")
     builder.adjust(1)
     return builder.as_markup()
@@ -62,7 +65,10 @@ async def show_library_track(callback: CallbackQuery):
     builder.button(text="🏠 Главное меню", callback_data="menu:main")
     builder.adjust(1)
 
-    await callback.message.edit_text(f"{track.artist} — {track.title}", reply_markup=builder.as_markup())
+    await callback.message.edit_text(
+        f"{track.artist} — {track.title}\nID: {track.video_id}",
+        reply_markup=builder.as_markup(),
+    )
     await callback.answer()
 
 

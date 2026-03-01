@@ -4,3 +4,4 @@ config.py
 browser.json
 include/deno
 cookies.txt
+/inline_media/

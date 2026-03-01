@@ -192,20 +192,6 @@ async def process_inline_download_callback(callback: CallbackQuery):
         )
 
 
-@router.callback_query(F.data.startswith("inline:dlm:"))
-async def process_inline_download_media_callback(callback: CallbackQuery):
-    video_id = callback.data.split(":", 2)[2]
-    await callback.answer("Пробую экспериментальную отправку...")
-    try:
-        await send_track_to_private_chat(callback, video_id, use_media_audio=True)
-    except Exception as exc:
-        logger.exception("inline_send_media_failed video_id=%s error=%s", video_id, exc)
-        await callback.bot.send_message(
-            callback.from_user.id,
-            "Экспериментальный режим не сработал. Откройте чат с ботом /start и попробуйте снова.",
-        )
-
-
 @router.callback_query(F.data == "lib:already")
 async def already_in_lib(callback: CallbackQuery):
     await callback.answer("Трек уже есть в библиотеке")

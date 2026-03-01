@@ -1,3 +1,5 @@
+import re
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -6,16 +8,19 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineQuery,
     InlineQueryResultArticle,
+    InlineQueryResultAudio,
     InputTextMessageContent,
     Message,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from lib.youtubectrl import search_tracks
+from config import BOT_USERNAME, INLINE_SERVER_DOMAIN
+from lib.youtubectrl import ensure_inline_mp3, get_track_info_by_video_id, search_tracks
 from states import SearchStates
 from utils.keyboards import back_to_menu_keyboard
 
 router = Router()
+YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
 @router.callback_query(F.data == "menu:search")
@@ -76,7 +81,10 @@ async def process_search_query(message: Message, state: FSMContext):
     for t in tracks[:10]:
         if not t.get("videoId"):
             continue
-        builder.button(text=f"{t['artist']} - {t['title']}", callback_data=f"track:{t['videoId']}")
+        builder.button(
+            text=f"{t['artist']} - {t['title']} | ID: {t['videoId']}",
+            callback_data=f"track:{t['videoId']}",
+        )
     builder.button(text="🏠 Главное меню", callback_data="menu:main")
     builder.adjust(1)
     if prompt_message_id:
@@ -109,7 +117,47 @@ async def inline_music_search(inline_query: InlineQuery):
         )
         return
 
+    if experimental_mode:
+        video_id = query
+        if not YOUTUBE_ID_RE.match(video_id):
+            await inline_query.answer(
+                [],
+                cache_time=1,
+                is_personal=True,
+                switch_pm_text="Для --режима укажите точный youtube_id (11 символов). Пример: --86DSeMKT_fM",
+                switch_pm_parameter="search",
+            )
+            return
+
+        try:
+            await ensure_inline_mp3(video_id)
+            track = await get_track_info_by_video_id(video_id)
+        except Exception:
+            await inline_query.answer(
+                [],
+                cache_time=1,
+                is_personal=True,
+                switch_pm_text="Не удалось подготовить mp3 по этому ID. Проверьте ID и попробуйте снова.",
+                switch_pm_parameter="search",
+            )
+            return
+
+        artist = track.get("artist", "Unknown")
+        title = track.get("title", "Без названия")
+        audio_url = f"{INLINE_SERVER_DOMAIN.rstrip('/')}/{video_id}.mp3"
+        result = InlineQueryResultAudio(
+            id=f"au_{video_id}",
+            audio_url=audio_url,
+            title=title,
+            performer=artist,
+            audio_duration=track.get("duration"),
+            caption=f"{artist} — {title} | ID: {video_id}",
+        )
+        await inline_query.answer([result], cache_time=1, is_personal=True)
+        return
+
     tracks = await search_tracks(query, limit=10)
+
     results = []
     for track in tracks:
         video_id = track.get("videoId")
@@ -118,20 +166,19 @@ async def inline_music_search(inline_query: InlineQuery):
         artist = track.get("artist", "Unknown")
         title = track.get("title", "Без названия")
         link = f"https://music.youtube.com/watch?v={video_id}"
-        text = f"🎵 {artist} — {title}\n{link}"
-        download_callback = f"inline:dlm:{video_id}" if experimental_mode else f"inline:dl:{video_id}"
-        download_text = "⬇ Скачать в ЛС (эксп.)" if experimental_mode else "⬇ Скачать в ЛС"
+        footer = f"@{BOT_USERNAME}" if BOT_USERNAME else "@music_bot"
+        text = f"🎵 {artist} — {title}\nID: {video_id}\n{link}\n\n{footer}"
         results.append(
             InlineQueryResultArticle(
                 id=video_id,
                 title=f"{artist} — {title}",
-                description="YouTube Music",
+                description=f"ID: {video_id}",
                 input_message_content=InputTextMessageContent(
                     message_text=text,
                 ),
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
-                        [InlineKeyboardButton(text=download_text, callback_data=download_callback)],
+                        [InlineKeyboardButton(text="⬇ Скачать в ЛС", callback_data=f"inline:dl:{video_id}")],
                         [InlineKeyboardButton(text="▶ Открыть в YouTube Music", url=link)],
                     ]
                 ),
