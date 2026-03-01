@@ -1,9 +1,11 @@
 import asyncio
 import logging
+
 from aiogram import Bot, Dispatcher
+
 from config import BOT_TOKEN
 from database import init_db
-from handlers import menu, search, download, library
+from handlers import download, library, menu, playlists, radio, search
 
 logging.basicConfig(level=logging.INFO)
 
@@ -14,10 +16,14 @@ dp.include_router(menu.router)
 dp.include_router(search.router)
 dp.include_router(download.router)
 dp.include_router(library.router)
+dp.include_router(playlists.router)
+dp.include_router(radio.router)
+
 
 async def main():
     await init_db()
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

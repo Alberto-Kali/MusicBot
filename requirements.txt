@@ -1,7 +1,10 @@
 aiogram
 ytmusicapi
-yt-dlp
-mutagen            # для работы с метаданными MP3
+yt-dlp-ejs
+mutagen
 SQLAlchemy
 asyncpg
 aiosqlite
+aiohttp
+Pillow
+requests
