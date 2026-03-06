@@ -1,7 +1,15 @@
 /.venv
 __pycache__
-config.py
 browser.json
 include/deno
 cookies.txt
 /inline_media/
+.env
+.env.secrets
+.env.secrets.bot
+.env.secrets.backend
+telegram-bot/data/
+backend/tmp_legacy/
+backend/inline_media_legacy/
+
+backend/include/deno

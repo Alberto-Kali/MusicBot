@@ -4,7 +4,6 @@ yt-dlp-ejs
 mutagen
 SQLAlchemy
 asyncpg
-aiosqlite
 aiohttp
 Pillow
 requests

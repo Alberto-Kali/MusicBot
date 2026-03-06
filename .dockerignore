@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+music_bot.db
+inline_media
+tmp
+
+.env.secrets*
+browser.json
+cookies.txt

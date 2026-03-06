@@ -1,0 +1,11 @@
+aiogram
+ytmusicapi
+yt-dlp-ejs
+mutagen
+SQLAlchemy
+asyncpg
+aiohttp
+Pillow
+requests
+fastapi
+uvicorn
