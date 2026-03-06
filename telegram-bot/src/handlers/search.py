@@ -14,8 +14,8 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import BOT_USERNAME, INLINE_SERVER_DOMAIN
-from lib.youtubectrl import ensure_inline_mp3, get_track_info_by_video_id, search_tracks
+from config import BOT_USERNAME
+from lib.backend_client import get_stream_url, get_track_info_by_video_id, search_tracks
 from states import SearchStates
 from utils.keyboards import back_to_menu_keyboard
 
@@ -130,7 +130,6 @@ async def inline_music_search(inline_query: InlineQuery):
             return
 
         try:
-            await ensure_inline_mp3(video_id)
             track = await get_track_info_by_video_id(video_id)
         except Exception:
             await inline_query.answer(
@@ -144,7 +143,7 @@ async def inline_music_search(inline_query: InlineQuery):
 
         artist = track.get("artist", "Unknown")
         title = track.get("title", "Без названия")
-        audio_url = f"{INLINE_SERVER_DOMAIN.rstrip('/')}/{video_id}.mp3"
+        audio_url = get_stream_url(video_id)
         result = InlineQueryResultAudio(
             id=f"au_{video_id}",
             audio_url=audio_url,

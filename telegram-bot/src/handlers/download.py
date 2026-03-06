@@ -1,12 +1,12 @@
-import os
 import logging
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, InputMediaAudio
+from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaAudio
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from handlers.common import send_success_sticker
+from lib.backend_client import download_thumbnail_bytes, download_track_bytes, get_track_info_by_video_id
 from lib.controldb import (
     add_to_library,
     ensure_track,
@@ -14,12 +14,16 @@ from lib.controldb import (
     get_track_by_video_id,
     get_user_library,
 )
-from lib.youtubectrl import download_audio_with_progress
-from lib.youtubectrl import get_track_info_by_video_id
 from utils.keyboards import main_menu_keyboard
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+
+async def _load_audio_and_thumb(video_id: str, thumbnail_url: str | None, progress_callback):
+    audio_bytes = await download_track_bytes(video_id, progress_callback=progress_callback)
+    thumb_bytes = await download_thumbnail_bytes(thumbnail_url)
+    return audio_bytes, thumb_bytes
 
 
 async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, video_id: str):
@@ -37,7 +41,7 @@ async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, vid
         await progress_msg.edit_text(f"Загрузка: {percent}%")
 
     try:
-        mp3_path, thumb_path = await download_audio_with_progress(
+        audio_bytes, thumb_bytes = await _load_audio_and_thumb(
             video_id,
             track_info.get("thumbnail"),
             update_progress,
@@ -47,20 +51,16 @@ async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, vid
         await progress_msg.edit_text(f"Ошибка при скачивании: {exc}")
         return
 
-    audio_file = FSInputFile(mp3_path)
-    thumb_file = FSInputFile(thumb_path) if thumb_path and os.path.exists(thumb_path) else None
+    audio_file = BufferedInputFile(audio_bytes, filename=f"{video_id}.mp3")
+    thumb_file = BufferedInputFile(thumb_bytes, filename=f"{video_id}.jpg") if thumb_bytes else None
 
     await callback.message.answer_audio(
-        audio_file,
+        audio=audio_file,
         title=track_info["title"],
         performer=track_info["artist"],
         thumbnail=thumb_file,
         caption=f"{track_info['artist']} — {track_info['title']}",
     )
-
-    os.remove(mp3_path)
-    if thumb_path and os.path.exists(thumb_path):
-        os.remove(thumb_path)
 
     db_track = await ensure_track(
         {
@@ -105,10 +105,8 @@ async def send_track_to_private_chat(callback: CallbackQuery, video_id: str, use
     async def update_progress(percent: int):
         await progress_msg.edit_text(f"Загрузка: {percent}%")
 
-    mp3_path = None
-    thumb_path = None
     try:
-        mp3_path, thumb_path = await download_audio_with_progress(
+        audio_bytes, thumb_bytes = await _load_audio_and_thumb(
             video_id,
             track_info.get("thumbnail"),
             update_progress,
@@ -118,8 +116,8 @@ async def send_track_to_private_chat(callback: CallbackQuery, video_id: str, use
         await progress_msg.edit_text(f"Ошибка при скачивании: {exc}")
         return
 
-    audio_file = FSInputFile(mp3_path)
-    thumb_file = FSInputFile(thumb_path) if thumb_path and os.path.exists(thumb_path) else None
+    audio_file = BufferedInputFile(audio_bytes, filename=f"{video_id}.mp3")
+    thumb_file = BufferedInputFile(thumb_bytes, filename=f"{video_id}.jpg") if thumb_bytes else None
 
     if use_media_audio:
         media = InputMediaAudio(
@@ -136,17 +134,12 @@ async def send_track_to_private_chat(callback: CallbackQuery, video_id: str, use
     else:
         await callback.bot.send_audio(
             callback.from_user.id,
-            audio_file,
+            audio=audio_file,
             title=track_info["title"],
             performer=track_info["artist"],
             thumbnail=thumb_file,
             caption=f"{track_info['artist']} — {track_info['title']}",
         )
-
-    if mp3_path and os.path.exists(mp3_path):
-        os.remove(mp3_path)
-    if thumb_path and os.path.exists(thumb_path):
-        os.remove(thumb_path)
 
     db_track = await ensure_track(
         {

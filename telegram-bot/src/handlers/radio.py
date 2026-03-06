@@ -4,7 +4,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from handlers.download import send_track_and_actions
-from lib.youtubectrl import search_tracks
+from lib.backend_client import search_tracks
 from states import RadioStates
 from utils.keyboards import main_menu_keyboard
 
