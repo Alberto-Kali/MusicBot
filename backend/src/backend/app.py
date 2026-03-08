@@ -7,23 +7,29 @@ import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from starlette.background import BackgroundTask
 
-from backend.config import BACKEND_HOST, BACKEND_PORT, prepare_auth_files
+from backend.config import BACKEND_HOST, BACKEND_PORT, DATABASE_URL, prepare_auth_files
 from backend.music_service import MusicService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 music_service: MusicService | None = None
+db_engine: AsyncEngine | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global music_service
+    global music_service, db_engine
     auth = prepare_auth_files()
     music_service = MusicService(auth)
+    db_engine = create_async_engine(DATABASE_URL, echo=False)
     yield
+    if db_engine is not None:
+        await db_engine.dispose()
 
 
 app = FastAPI(title="Music Backend", lifespan=lifespan)
@@ -33,6 +39,12 @@ def _service() -> MusicService:
     if music_service is None:
         raise RuntimeError("Music service is not initialized")
     return music_service
+
+
+def _db() -> AsyncEngine:
+    if db_engine is None:
+        raise RuntimeError("DB engine is not initialized")
+    return db_engine
 
 
 def _safe_remove(path: str) -> None:
@@ -53,6 +65,41 @@ async def search_tracks(q: str = Query(min_length=2), limit: int = Query(default
         return {"items": await _service().search_tracks(q, limit=limit)}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Ошибка поиска: {exc}") from exc
+
+
+@app.get("/api/v1/charts")
+async def get_charts(country: str = Query(default="EN", min_length=2, max_length=2), limit: int = Query(default=20, ge=1, le=50)):
+    try:
+        return {"items": await _service().get_charts(country.upper(), limit=limit)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ошибка получения чартов: {exc}") from exc
+
+
+@app.get("/api/v1/library/{telegram_id}")
+async def get_user_library(telegram_id: int, limit: int = Query(default=100, ge=1, le=500)):
+    sql = text(
+        """
+        SELECT
+            t.video_id AS "videoId",
+            COALESCE(t.title, 'Без названия') AS title,
+            COALESCE(t.artist, 'Unknown') AS artist,
+            t.duration AS duration,
+            t.thumbnail AS thumbnail
+        FROM users u
+        JOIN user_library ul ON ul.user_id = u.id
+        JOIN tracks t ON t.id = ul.track_id
+        WHERE u.telegram_id = :telegram_id
+        ORDER BY ul.added_at DESC
+        LIMIT :limit
+        """
+    )
+    try:
+        async with _db().connect() as conn:
+            result = await conn.execute(sql, {"telegram_id": telegram_id, "limit": limit})
+            items = [dict(row._mapping) for row in result]
+        return {"items": items}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ошибка чтения библиотеки: {exc}") from exc
 
 
 @app.get("/api/v1/tracks/{video_id}")

@@ -44,5 +44,16 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  telegram-webapp:
+    build:
+      context: ./telegram-webapp
+      dockerfile: Dockerfile
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
 volumes:
   postgres-data:

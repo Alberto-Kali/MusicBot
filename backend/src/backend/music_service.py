@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import os
+import threading
+import time
 from pathlib import Path
 
 import yt_dlp
@@ -87,10 +89,14 @@ def _parse_remote_components(value: str | list | tuple | set | None) -> list[str
 
 
 class MusicService:
+    _STREAM_CACHE_TTL_SEC = 600
+
     def __init__(self, auth_files: AuthFiles):
         self._auth = auth_files
         self._ytmusic = YTMusic(auth_files.browser_json_file)
         self._ytdlp_logger = YtdlpLogProxy()
+        self._stream_cache: dict[str, tuple[float, dict]] = {}
+        self._stream_cache_lock = threading.Lock()
 
         try:
             self._parsed_js_runtimes = _parse_js_runtimes(YTDLP_JS_RUNTIMES)
@@ -142,6 +148,130 @@ class MusicService:
     async def search_tracks(self, query: str, limit: int = 10) -> list[dict]:
         return await asyncio.to_thread(self.search_tracks_sync, query, limit)
 
+    @staticmethod
+    def _chart_items(bucket) -> list[dict]:
+        if isinstance(bucket, dict):
+            items = bucket.get("items", [])
+            return items if isinstance(items, list) else []
+        if isinstance(bucket, list):
+            return bucket
+        return []
+
+    @staticmethod
+    def _parse_duration_seconds(raw) -> int | None:
+        if isinstance(raw, int):
+            return raw
+        if not isinstance(raw, str) or ":" not in raw:
+            return None
+        parts = raw.split(":")
+        if len(parts) == 2:
+            m, s = parts
+            if m.isdigit() and s.isdigit():
+                return int(m) * 60 + int(s)
+        return None
+
+    @staticmethod
+    def _normalize_chart_country(country: str) -> str:
+        code = (country or "").strip().upper()
+        if not code:
+            return "US"
+        if code == "EN":
+            return "US"
+        return code
+
+    def _fetch_charts_sections(self, country: str) -> list[dict]:
+        charts = self._ytmusic.get_charts(country=country)
+        if not isinstance(charts, dict):
+            return []
+        merged_items: list[dict] = []
+        for section in ("songs", "videos", "trending"):
+            merged_items.extend(self._chart_items(charts.get(section)))
+        if not merged_items:
+            merged_items.extend(self._chart_items(charts.get("items")))
+        return merged_items
+
+    def _charts_search_fallback(self, country: str, limit: int) -> list[dict]:
+        # Резервный сценарий, если get_charts пустой/недоступен.
+        queries = [
+            f"top songs {country}",
+            f"{country} hits",
+            "billboard hot 100",
+            "global top songs",
+        ]
+        seen: set[str] = set()
+        tracks: list[dict] = []
+        for q in queries:
+            try:
+                found = self.search_tracks_sync(q, limit=limit)
+            except Exception as exc:
+                logger.warning("Fallback charts search failed for query=%r err=%s", q, exc)
+                continue
+            for item in found:
+                video_id = item.get("videoId")
+                if not video_id or video_id in seen:
+                    continue
+                seen.add(video_id)
+                tracks.append(item)
+                if len(tracks) >= limit:
+                    return tracks
+        return tracks
+
+    def get_charts_sync(self, country: str = "RU", limit: int = 20) -> list[dict]:
+        normalized_country = self._normalize_chart_country(country)
+        merged_items: list[dict] = []
+        for candidate in (normalized_country, "US", "RU"):
+            try:
+                merged_items = self._fetch_charts_sections(candidate)
+                if merged_items:
+                    break
+            except Exception as exc:
+                logger.warning("Не удалось загрузить charts для %s: %s", candidate, exc)
+                continue
+
+        tracks: list[dict] = []
+        seen: set[str] = set()
+        for item in merged_items:
+            if not isinstance(item, dict):
+                continue
+            video_id = item.get("videoId")
+            if not video_id or video_id in seen:
+                continue
+            seen.add(video_id)
+
+            artist = "Unknown"
+            artists = item.get("artists")
+            if isinstance(artists, list) and artists:
+                artist = artists[0].get("name") or artist
+
+            duration = item.get("duration_seconds")
+            if duration is None:
+                duration = self._parse_duration_seconds(item.get("duration"))
+
+            tracks.append(
+                {
+                    "videoId": video_id,
+                    "title": item.get("title") or "Без названия",
+                    "artist": artist,
+                    "duration": duration,
+                    "thumbnail": (item.get("thumbnails") or [{}])[-1].get("url"),
+                }
+            )
+            if len(tracks) >= limit:
+                break
+
+        if tracks:
+            return tracks
+
+        fallback_tracks = self._charts_search_fallback(normalized_country, limit=limit)
+        if fallback_tracks:
+            logger.info("Charts fallback activated country=%s items=%d", normalized_country, len(fallback_tracks))
+        else:
+            logger.warning("Charts fallback returned empty country=%s", normalized_country)
+        return fallback_tracks
+
+    async def get_charts(self, country: str = "RU", limit: int = 20) -> list[dict]:
+        return await asyncio.to_thread(self.get_charts_sync, country, limit)
+
     def get_track_info_sync(self, video_id: str) -> dict:
         url = f"https://www.youtube.com/watch?v={video_id}"
         ydl_opts = {**self._common_ydl_opts(), "skip_download": True}
@@ -182,27 +312,80 @@ class MusicService:
 
         raise RuntimeError("У видео нет доступного аудиопотока")
 
+    @staticmethod
+    def _pick_best_audio_format_from_info(info: dict) -> dict | None:
+        formats = info.get("formats", [])
+        audio_only = [
+            f
+            for f in formats
+            if f.get("acodec") not in (None, "none") and f.get("vcodec") == "none"
+        ]
+        if audio_only:
+            audio_only.sort(key=lambda f: f.get("abr", 0) or 0, reverse=True)
+            return audio_only[0]
+
+        any_audio = [f for f in formats if f.get("acodec") not in (None, "none")]
+        if any_audio:
+            any_audio.sort(key=lambda f: f.get("abr", 0) or 0, reverse=True)
+            return any_audio[0]
+        return None
+
+    def _get_cached_stream_info(self, video_id: str) -> dict | None:
+        now = time.monotonic()
+        with self._stream_cache_lock:
+            entry = self._stream_cache.get(video_id)
+            if not entry:
+                return None
+            expires_at, payload = entry
+            if expires_at <= now:
+                self._stream_cache.pop(video_id, None)
+                return None
+            return payload
+
+    def _set_cached_stream_info(self, video_id: str, payload: dict) -> None:
+        expires_at = time.monotonic() + self._STREAM_CACHE_TTL_SEC
+        with self._stream_cache_lock:
+            self._stream_cache[video_id] = (expires_at, payload)
+
     def get_stream_info_sync(self, video_id: str) -> dict:
+        cached = self._get_cached_stream_info(video_id)
+        if cached:
+            return cached
+
         url = f"https://www.youtube.com/watch?v={video_id}"
-        chosen_format = self.get_best_audio_format(video_id)
         ydl_opts = {
             **self._common_ydl_opts(),
-            "format": chosen_format,
             "skip_download": True,
+            "extract_flat": False,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        stream_url = info.get("url")
-        if not stream_url:
-            req = info.get("requested_formats") or []
-            if req:
-                stream_url = req[0].get("url")
+        best_format = self._pick_best_audio_format_from_info(info)
+        if not best_format:
+            raise RuntimeError("У видео нет доступного аудиопотока")
+
+        chosen_format = str(best_format.get("format_id") or "")
+        stream_url = best_format.get("url")
+        if not stream_url and chosen_format:
+            # Fallback: запрашиваем explicit формат, если URL не пришёл в formats.
+            ydl_opts_with_format = {
+                **self._common_ydl_opts(),
+                "format": chosen_format,
+                "skip_download": True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts_with_format) as ydl:
+                fallback_info = ydl.extract_info(url, download=False)
+            stream_url = fallback_info.get("url")
+            if not stream_url:
+                req = fallback_info.get("requested_formats") or []
+                if req:
+                    stream_url = req[0].get("url")
 
         if not stream_url:
             raise RuntimeError("Не удалось получить stream URL")
 
-        return {
+        payload = {
             "videoId": video_id,
             "title": info.get("title") or "Без названия",
             "artist": info.get("uploader") or info.get("channel") or "Unknown",
@@ -210,6 +393,8 @@ class MusicService:
             "stream_url": stream_url,
             "format_id": chosen_format,
         }
+        self._set_cached_stream_info(video_id, payload)
+        return payload
 
     async def get_stream_info(self, video_id: str) -> dict:
         return await asyncio.to_thread(self.get_stream_info_sync, video_id)

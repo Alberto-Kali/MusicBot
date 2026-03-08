@@ -11,5 +11,7 @@ cookies.txt
 telegram-bot/data/
 backend/tmp_legacy/
 backend/inline_media_legacy/
+telegram-webapp/music-app/node_modules/
+telegram-webapp/music-app/dist/
 
 backend/include/deno

@@ -1,6 +1,7 @@
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaAudio
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -26,6 +27,23 @@ async def _load_audio_and_thumb(video_id: str, thumbnail_url: str | None, progre
     return audio_bytes, thumb_bytes
 
 
+def _progress_updater(progress_msg):
+    last_percent = -1
+
+    async def update(percent: int):
+        nonlocal last_percent
+        if percent <= last_percent:
+            return
+        last_percent = percent
+        try:
+            await progress_msg.edit_text(f"Загрузка: {percent}%")
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc):
+                raise
+
+    return update
+
+
 async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, video_id: str):
     data = await state.get_data()
     results_dict = data.get("search_results", {})
@@ -37,8 +55,7 @@ async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, vid
 
     progress_msg = await callback.message.edit_text("Загрузка: 0%")
 
-    async def update_progress(percent: int):
-        await progress_msg.edit_text(f"Загрузка: {percent}%")
+    update_progress = _progress_updater(progress_msg)
 
     try:
         audio_bytes, thumb_bytes = await _load_audio_and_thumb(
@@ -102,8 +119,7 @@ async def send_track_to_private_chat(callback: CallbackQuery, video_id: str, use
 
     progress_msg = await callback.bot.send_message(callback.from_user.id, "Загрузка: 0%")
 
-    async def update_progress(percent: int):
-        await progress_msg.edit_text(f"Загрузка: {percent}%")
+    update_progress = _progress_updater(progress_msg)
 
     try:
         audio_bytes, thumb_bytes = await _load_audio_and_thumb(
