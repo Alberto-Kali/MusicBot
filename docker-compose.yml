@@ -19,7 +19,7 @@ services:
     restart: unless-stopped
 
   backend:
-    image: ghcr.io/alberto-kali/musicbot-backend:sha-0a9e2e2fc2effbd10ff36517ab50a6de8eab9551
+    image: ghcr.io/alberto-kali/musicbot-backend:sha-e02f86525bda78d3b75b6b2dd24089685f2bde46
     env_file:
       - .env
       - .env.secrets.backend
@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   telegram-bot:
-    image: ghcr.io/alberto-kali/musicbot-telegram-bot:sha-802094b9289aaa5367d7bd746dfdd05129a5edba
+    image: ghcr.io/alberto-kali/musicbot-telegram-bot:sha-7c0a4b04cd1ff998117a31fe3597a67193734b5e
     env_file:
       - .env
       - .env.secrets.bot
@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
 
   telegram-webapp:
-    image: ghcr.io/alberto-kali/musicbot-telegram-webapp:sha-fc9260994ac2e4a1f72fd4daf0445733c33a0b85
+    image: ghcr.io/alberto-kali/musicbot-telegram-webapp:sha-6d0fbe8e99f10cf8e915dfd643f875b89be9e58c
     depends_on:
       backend:
         condition: service_started

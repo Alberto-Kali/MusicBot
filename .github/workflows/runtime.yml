@@ -1,6 +1,7 @@
 name: Runtime Compose CI
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -19,6 +20,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Bootstrap example env files
+        shell: bash
+        run: |
+          cp .env.example .env
+          cp .env.secrets.backend.example .env.secrets.backend
+          cp .env.secrets.bot.example .env.secrets.bot
 
       - name: Docker compose config
         shell: bash
