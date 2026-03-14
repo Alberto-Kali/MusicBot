@@ -15,6 +15,6 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY src /app/src
-COPY include /app/include
+RUN mkdir -p /app/include
 
 CMD ["python", "-m", "backend.app"]
