@@ -1,6 +1,7 @@
 name: Service Image CI
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - backend
