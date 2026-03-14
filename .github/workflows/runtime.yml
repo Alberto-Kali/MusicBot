@@ -1,0 +1,37 @@
+name: Runtime Compose CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  validate-compose:
+    name: Validate Compose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker compose config
+        shell: bash
+        run: docker compose -f docker-compose.yml config >/dev/null
+
+      - name: Verify GHCR tags exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r image; do
+            case "$image" in
+              ghcr.io/*)
+                docker buildx imagetools inspect "$image" >/dev/null
+                ;;
+            esac
+          done < <(docker compose -f docker-compose.yml config --images)

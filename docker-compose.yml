@@ -1,3 +1,5 @@
+name: music
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -6,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-music_bot}
       POSTGRES_USER: ${POSTGRES_USER:-music}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-music}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-music} -d ${POSTGRES_DB:-music_bot}"]
       interval: 5s
@@ -17,23 +19,22 @@ services:
     restart: unless-stopped
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/alberto-kali/musicbot-backend:sha-0a9e2e2fc2effbd10ff36517ab50a6de8eab9551
     env_file:
       - .env
       - .env.secrets.backend
     environment:
-      BACKEND_HOST: 0.0.0.0
-      BACKEND_PORT: 8080
+      BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
+      BACKEND_PORT: ${BACKEND_PORT:-8080}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
     restart: unless-stopped
 
   telegram-bot:
-    build:
-      context: ./telegram-bot
-      dockerfile: Dockerfile
+    image: ghcr.io/alberto-kali/musicbot-telegram-bot:sha-802094b9289aaa5367d7bd746dfdd05129a5edba
     env_file:
       - .env
       - .env.secrets.bot
@@ -45,9 +46,7 @@ services:
     restart: unless-stopped
 
   telegram-webapp:
-    build:
-      context: ./telegram-webapp
-      dockerfile: Dockerfile
+    image: ghcr.io/alberto-kali/musicbot-telegram-webapp:sha-fc9260994ac2e4a1f72fd4daf0445733c33a0b85
     depends_on:
       backend:
         condition: service_started
