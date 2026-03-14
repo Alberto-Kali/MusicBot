@@ -6,6 +6,7 @@ BACKEND_HOST = os.getenv("BACKEND_HOST", "0.0.0.0")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8080"))
 BACKEND_TEMP_DIR = Path(os.getenv("BACKEND_TEMP_DIR", "./tmp/backend")).resolve()
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://music:music@postgres:5432/music_bot").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("BOT_TOKEN", "")).strip()
 
 YTDLP_JS_RUNTIMES = os.getenv("YTDLP_JS_RUNTIMES", "deno:./include/deno")
 YTDLP_REMOTE_COMPONENTS = os.getenv("YTDLP_REMOTE_COMPONENTS", "ejs:github")
