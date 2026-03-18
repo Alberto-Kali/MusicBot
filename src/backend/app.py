@@ -310,6 +310,23 @@ async def get_track(video_id: str):
         raise HTTPException(status_code=502, detail=f"Ошибка получения трека: {exc}") from exc
 
 
+@app.get("/api/v1/direct-stream/{video_id}")
+async def get_direct_stream(video_id: str):
+    try:
+        stream_info = await _service().get_direct_stream_info(video_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ошибка direct stream URL: {exc}") from exc
+
+    return {
+        "videoId": stream_info["videoId"],
+        "stream_url": stream_info["stream_url"],
+        "duration": stream_info.get("duration"),
+        "mime_type": stream_info.get("mime_type"),
+        "expires_in": stream_info.get("expires_in"),
+        "source": stream_info.get("source", "direct"),
+    }
+
+
 @app.get("/api/v1/stream/{video_id}.mp3")
 async def stream_track(video_id: str, request: Request):
     try:
