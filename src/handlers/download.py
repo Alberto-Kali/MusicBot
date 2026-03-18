@@ -68,6 +68,8 @@ async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, vid
         await progress_msg.edit_text(f"Ошибка при скачивании: {exc}")
         return
 
+    await progress_msg.edit_text("Файл получен. Отправляю в Telegram...")
+
     audio_file = BufferedInputFile(audio_bytes, filename=f"{video_id}.mp3")
     thumb_file = BufferedInputFile(thumb_bytes, filename=f"{video_id}.jpg") if thumb_bytes else None
 
@@ -101,7 +103,7 @@ async def send_track_and_actions(callback: CallbackQuery, state: FSMContext, vid
     builder.button(text="🏠 Главное меню", callback_data="menu:main")
     builder.adjust(1)
 
-    await progress_msg.edit_text("Что делаем дальше?", reply_markup=builder.as_markup())
+    await progress_msg.edit_text("Загрузка: 100%\nЧто делаем дальше?", reply_markup=builder.as_markup())
 
 
 async def send_track_to_private_chat(callback: CallbackQuery, video_id: str, use_media_audio: bool = False):
@@ -131,6 +133,8 @@ async def send_track_to_private_chat(callback: CallbackQuery, video_id: str, use
         logger.exception("inline_download_failed video_id=%s error=%s", video_id, exc)
         await progress_msg.edit_text(f"Ошибка при скачивании: {exc}")
         return
+
+    await progress_msg.edit_text("Файл получен. Отправляю в Telegram...")
 
     audio_file = BufferedInputFile(audio_bytes, filename=f"{video_id}.mp3")
     thumb_file = BufferedInputFile(thumb_bytes, filename=f"{video_id}.jpg") if thumb_bytes else None
@@ -177,7 +181,7 @@ async def send_track_to_private_chat(callback: CallbackQuery, video_id: str, use
     builder.button(text="🏠 Главное меню", callback_data="menu:main")
     builder.adjust(1)
 
-    await progress_msg.edit_text("Трек отправлен в личку.", reply_markup=builder.as_markup())
+    await progress_msg.edit_text("Загрузка: 100%\nТрек отправлен в личку.", reply_markup=builder.as_markup())
 
 
 @router.callback_query(F.data.startswith("track:"))

@@ -51,14 +51,11 @@ async def download_track_bytes(video_id: str, progress_callback=None) -> bytes:
                 chunks.append(chunk)
                 downloaded += len(chunk)
                 if progress_callback and total > 0:
-                    percent = int(downloaded * 100 / total)
+                    percent = min(int(downloaded * 100 / total), 99)
                     bucket = percent // 10
                     if bucket > last_bucket:
                         last_bucket = bucket
                         await progress_callback(percent)
-
-            if progress_callback and last_bucket < 10:
-                await progress_callback(100)
 
             return b"".join(chunks)
 
