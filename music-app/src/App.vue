@@ -9,6 +9,15 @@ type Track = {
   thumbnail?: string | null
 }
 
+type DirectStreamResponse = {
+  videoId: string
+  stream_url: string
+  duration?: number | null
+  mime_type?: string | null
+  expires_in?: number | null
+  source?: string | null
+}
+
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 
 const query = ref('')
@@ -35,6 +44,8 @@ const mixEnabled = ref(false)
 const audioRef = ref<HTMLAudioElement | null>(null)
 const currentTime = ref(0)
 const duration = ref(0)
+const audioSourceMode = ref<'direct' | 'proxy'>('proxy')
+const streamLoadToken = ref(0)
 
 const canSearch = computed(() => query.value.trim().length >= 2)
 const hasTracks = computed(() => tracks.value.length > 0)
@@ -60,6 +71,7 @@ const formatDuration = (seconds?: number | null) => {
 }
 
 const streamUrl = (videoId: string) => `${apiBase}/api/v1/stream/${encodeURIComponent(videoId)}.mp3`
+const directStreamUrl = (videoId: string) => `${apiBase}/api/v1/direct-stream/${encodeURIComponent(videoId)}`
 
 const parseTelegramUserFromInitData = (initData: string): { id?: number; username?: string } => {
   try {
@@ -85,16 +97,21 @@ const shuffle = <T,>(list: T[]): T[] => {
   return arr
 }
 
-const setCurrentIndex = async (index: number, autoplay = true) => {
-  if (index < 0 || index >= queue.value.length) return
-  const track = queue.value[index]
-  if (!track) return
-  currentIndex.value = index
-  audioSrc.value = streamUrl(track.videoId)
-  currentTime.value = 0
-  duration.value = track.duration ?? 0
-  trackInLibrary.value = false
+const resolvePrimaryAudioUrl = async (videoId: string): Promise<string> => {
+  const resp = await fetch(directStreamUrl(videoId))
+  if (!resp.ok) {
+    throw new Error(`Direct stream HTTP ${resp.status}`)
+  }
+  const data = (await resp.json()) as DirectStreamResponse
+  if (!data.stream_url) {
+    throw new Error('Direct stream URL is missing')
+  }
+  return data.stream_url
+}
 
+const setAudioSource = async (src: string, mode: 'direct' | 'proxy', autoplay: boolean) => {
+  audioSourceMode.value = mode
+  audioSrc.value = src
   if (!autoplay) return
   await nextTick()
   try {
@@ -102,7 +119,37 @@ const setCurrentIndex = async (index: number, autoplay = true) => {
   } catch {
     // autoplay может быть ограничен окружением
   }
+}
+
+const setCurrentIndex = async (index: number, autoplay = true) => {
+  if (index < 0 || index >= queue.value.length) return
+  const track = queue.value[index]
+  if (!track) return
+  const loadToken = streamLoadToken.value + 1
+  streamLoadToken.value = loadToken
+  currentIndex.value = index
+  currentTime.value = 0
+  duration.value = track.duration ?? 0
+  trackInLibrary.value = false
+  try {
+    const primaryUrl = await resolvePrimaryAudioUrl(track.videoId)
+    if (streamLoadToken.value !== loadToken) return
+    await setAudioSource(primaryUrl, 'direct', autoplay)
+  } catch {
+    if (streamLoadToken.value !== loadToken) return
+    await setAudioSource(streamUrl(track.videoId), 'proxy', autoplay)
+  }
   syncCurrentTrackLibraryState()
+}
+
+const onAudioError = async () => {
+  const track = currentTrack.value
+  if (!track) return
+  if (audioSourceMode.value === 'direct') {
+    await setAudioSource(streamUrl(track.videoId), 'proxy', true)
+    return
+  }
+  error.value = 'Не удалось воспроизвести трек даже через резервный backend stream.'
 }
 
 const syncCurrentTrackLibraryState = async () => {
@@ -461,6 +508,7 @@ onMounted(() => {
       :src="audioSrc"
       preload="none"
       autoplay
+      @error="onAudioError"
       @ended="onEnded"
       @play="isPlaying = true"
       @pause="isPlaying = false"
