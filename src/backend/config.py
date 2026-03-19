@@ -10,6 +10,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("BOT_TOKEN", ""))
 
 YTDLP_JS_RUNTIMES = os.getenv("YTDLP_JS_RUNTIMES", "deno:./include/deno")
 YTDLP_REMOTE_COMPONENTS = os.getenv("YTDLP_REMOTE_COMPONENTS", "ejs:github")
+SOCKS5_PROXY = os.getenv("SOCKS5_PROXY", "").strip()
 
 BACKEND_COOKIES_FILE = os.getenv("BACKEND_COOKIES_FILE", "")
 BACKEND_BROWSER_JSON_FILE = os.getenv("BACKEND_BROWSER_JSON_FILE", "")

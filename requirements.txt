@@ -6,7 +6,7 @@ SQLAlchemy
 asyncpg
 aiohttp
 Pillow
-requests
+requests[socks]
 fastapi
 uvicorn
 yt_dlp

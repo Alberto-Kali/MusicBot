@@ -13,7 +13,7 @@ import requests
 import yt_dlp
 from ytmusicapi import YTMusic
 
-from backend.config import AuthFiles, BACKEND_TEMP_DIR, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
+from backend.config import AuthFiles, BACKEND_TEMP_DIR, SOCKS5_PROXY, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +202,8 @@ class MusicService:
             opts["js_runtimes"] = self._parsed_js_runtimes
         if self._parsed_remote_components:
             opts["remote_components"] = self._parsed_remote_components
+        if SOCKS5_PROXY:
+            opts["proxy"] = SOCKS5_PROXY
         return opts
 
     def search_tracks_sync(self, query: str, limit: int = 10) -> list[dict]:
