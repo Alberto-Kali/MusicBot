@@ -2,15 +2,17 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, SOCKS5_PROXY
 from database import init_db
 from handlers import download, library, menu, playlists, radio, search
 from lib.backend_client import warmup_backend
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=BOT_TOKEN)
+bot_session = AiohttpSession(proxy=SOCKS5_PROXY or None)
+bot = Bot(token=BOT_TOKEN, session=bot_session)
 dp = Dispatcher()
 
 dp.include_router(menu.router)

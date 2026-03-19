@@ -13,6 +13,11 @@ if DATABASE_URL.startswith("sqlite"):
 
 BACKEND_INTERNAL_URL = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8080")
 BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8080")
+SOCKS5_PROXY = os.getenv("SOCKS5_PROXY", "").strip()
+CONTAINER_NO_PROXY = os.getenv(
+    "CONTAINER_NO_PROXY",
+    os.getenv("NO_PROXY", "localhost,127.0.0.1,::1,postgres,backend,telegram-webapp,telegram-bot"),
+).strip()
 
 # Legacy-переменные оставлены для обратной совместимости модулей.
 TEMP_DIR = os.getenv("TEMP_DIR", "./tmp")

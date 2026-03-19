@@ -5,7 +5,8 @@ mutagen
 SQLAlchemy
 asyncpg
 aiohttp
+aiohttp-socks
 Pillow
-requests
+requests[socks]
 fastapi
 uvicorn

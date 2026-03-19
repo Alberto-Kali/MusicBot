@@ -1,17 +1,42 @@
 import asyncio
 from urllib.parse import quote
+from urllib.parse import urlparse
 
 import aiohttp
+from aiohttp_socks import ProxyConnector
 
-from config import BACKEND_INTERNAL_URL, BACKEND_PUBLIC_URL
+from config import BACKEND_INTERNAL_URL, BACKEND_PUBLIC_URL, CONTAINER_NO_PROXY, SOCKS5_PROXY
 
 _CHUNK_SIZE = 64 * 1024
+_NO_PROXY_HOSTS = tuple(
+    host.strip().lower()
+    for host in CONTAINER_NO_PROXY.split(",")
+    if host.strip()
+)
+
+
+def _should_bypass_proxy(url: str) -> bool:
+    host = (urlparse(url).hostname or "").strip().lower()
+    if not host:
+        return True
+    for token in _NO_PROXY_HOSTS:
+        token = token.lstrip(".")
+        if host == token or host.endswith(f".{token}"):
+            return True
+    return False
+
+
+def _make_session(url: str, timeout: aiohttp.ClientTimeout) -> aiohttp.ClientSession:
+    if not SOCKS5_PROXY or _should_bypass_proxy(url):
+        return aiohttp.ClientSession(timeout=timeout)
+    connector = ProxyConnector.from_url(SOCKS5_PROXY)
+    return aiohttp.ClientSession(timeout=timeout, connector=connector)
 
 
 async def _get_json(path: str, params: dict | None = None) -> dict:
     url = f"{BACKEND_INTERNAL_URL.rstrip('/')}{path}"
     timeout = aiohttp.ClientTimeout(total=120)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with _make_session(url, timeout) as session:
         async with session.get(url, params=params) as response:
             if response.status >= 400:
                 text = await response.text()
@@ -36,7 +61,7 @@ async def download_track_bytes(video_id: str, progress_callback=None) -> bytes:
     url = f"{BACKEND_INTERNAL_URL.rstrip('/')}/api/v1/download/{quote(video_id)}.mp3"
     timeout = aiohttp.ClientTimeout(total=3600)
 
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with _make_session(url, timeout) as session:
         async with session.get(url) as response:
             if response.status >= 400:
                 text = await response.text()
@@ -65,7 +90,7 @@ async def download_thumbnail_bytes(url: str | None) -> bytes | None:
         return None
 
     timeout = aiohttp.ClientTimeout(total=30)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with _make_session(url, timeout) as session:
         async with session.get(url) as response:
             if response.status >= 400:
                 return None
