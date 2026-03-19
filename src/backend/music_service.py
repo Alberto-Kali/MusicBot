@@ -94,6 +94,9 @@ def _parse_remote_components(value: str | list | tuple | set | None) -> list[str
 
 class MusicService:
     _STREAM_CACHE_TTL_SEC = 600
+    _PREFIX_CACHE_SECONDS = 6
+    _PREFIX_CACHE_TTL_SEC = 90 * 24 * 60 * 60
+    _PREFIX_CACHE_PRUNE_INTERVAL_SEC = 6 * 60 * 60
     _DEFAULT_VISITOR_DATA = "CgtsZG1ySnZiQWtSbyiMjuGSBg%3D%3D"
     _INNERTUBE_ORIGIN = "https://music.youtube.com"
     _PLAYER_CLIENTS = (
@@ -133,6 +136,19 @@ class MusicService:
         self._ytdlp_logger = YtdlpLogProxy()
         self._stream_cache: dict[str, tuple[float, dict]] = {}
         self._stream_cache_lock = threading.Lock()
+        self._prefix_cache_dir = BACKEND_TEMP_DIR / "stream-prefix-cache"
+        self._last_prefix_cache_prune_at = 0.0
+        self._active_prewarms: set[str] = set()
+        self._active_prewarms_lock = threading.Lock()
+        self._prefix_cache_metrics = {
+            "hits": 0,
+            "misses": 0,
+            "writes": 0,
+            "prewarm_requests": 0,
+            "prewarm_successes": 0,
+            "prewarm_failures": 0,
+        }
+        self._prefix_cache_metrics_lock = threading.Lock()
         self._cookie_header = self._load_cookie_header(auth_files.cookies_file)
         self._cookie_map = self._load_cookie_map(auth_files.cookies_file)
         self._http = requests.Session()
@@ -426,6 +442,182 @@ class MusicService:
         with self._stream_cache_lock:
             self._stream_cache[video_id] = (expires_at, payload)
 
+    def _bump_prefix_metric(self, key: str, delta: int = 1) -> None:
+        with self._prefix_cache_metrics_lock:
+            self._prefix_cache_metrics[key] = self._prefix_cache_metrics.get(key, 0) + delta
+
+    def get_prefix_cache_metrics(self) -> dict[str, int]:
+        with self._prefix_cache_metrics_lock:
+            return dict(self._prefix_cache_metrics)
+
+    def _prune_prefix_cache(self) -> None:
+        now = time.time()
+        if now - self._last_prefix_cache_prune_at < self._PREFIX_CACHE_PRUNE_INTERVAL_SEC:
+            return
+        self._last_prefix_cache_prune_at = now
+
+        if not self._prefix_cache_dir.exists():
+            return
+
+        expire_before = now - self._PREFIX_CACHE_TTL_SEC
+        for path in self._prefix_cache_dir.glob("*.bin"):
+            try:
+                if path.stat().st_mtime < expire_before:
+                    path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                logger.warning("Не удалось очистить prefix cache %s: %s", path, exc)
+
+    def _prefix_cache_path(self, video_id: str) -> Path:
+        return self._prefix_cache_dir / f"{video_id}.bin"
+
+    def _prefix_cache_part_path(self, video_id: str) -> Path:
+        return self._prefix_cache_dir / f"{video_id}.part"
+
+    def get_prefix_cache_size(self, video_id: str, touch: bool = False) -> int | None:
+        self._prune_prefix_cache()
+        path = self._prefix_cache_path(video_id)
+        if not path.exists():
+            self._bump_prefix_metric("misses")
+            return None
+
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            self._bump_prefix_metric("misses")
+            return None
+
+        if time.time() - stat.st_mtime > self._PREFIX_CACHE_TTL_SEC:
+            path.unlink(missing_ok=True)
+            self._bump_prefix_metric("misses")
+            return None
+
+        if touch:
+            try:
+                os.utime(path, None)
+            except Exception:
+                pass
+        self._bump_prefix_metric("hits")
+        return stat.st_size
+
+    def get_prefix_cache_target_bytes(self, stream_info: dict) -> int:
+        bitrate = int(stream_info.get("bitrate") or 0)
+        if bitrate > 0:
+            if bitrate < 10_000:
+                bitrate *= 1000
+            estimated = int((bitrate / 8) * self._PREFIX_CACHE_SECONDS)
+        else:
+            estimated = 256 * 1024
+        return max(128 * 1024, min(estimated, 2 * 1024 * 1024))
+
+    def open_prefix_cache_writer(self, video_id: str, target_bytes: int):
+        existing_size = self.get_prefix_cache_size(video_id)
+        if existing_size is not None and existing_size >= target_bytes:
+            return None, None
+
+        self._prefix_cache_dir.mkdir(parents=True, exist_ok=True)
+        part_path = self._prefix_cache_part_path(video_id)
+        try:
+            writer = part_path.open("wb")
+        except Exception as exc:
+            logger.warning("Не удалось открыть prefix cache writer %s: %s", part_path, exc)
+            return None, None
+        return writer, part_path
+
+    def finalize_prefix_cache(self, video_id: str, part_path: Path | None, bytes_written: int) -> None:
+        if not part_path:
+            return
+        final_path = self._prefix_cache_path(video_id)
+        try:
+            if bytes_written > 0 and part_path.exists():
+                os.replace(part_path, final_path)
+                os.utime(final_path, None)
+                self._bump_prefix_metric("writes")
+            else:
+                part_path.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning("Не удалось сохранить prefix cache %s: %s", final_path, exc)
+
+    def remove_prefix_cache_part(self, part_path: Path | None) -> None:
+        if not part_path:
+            return
+        try:
+            part_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _mark_prewarm_started(self, video_id: str) -> bool:
+        with self._active_prewarms_lock:
+            if video_id in self._active_prewarms:
+                return False
+            self._active_prewarms.add(video_id)
+            return True
+
+    def _mark_prewarm_finished(self, video_id: str) -> None:
+        with self._active_prewarms_lock:
+            self._active_prewarms.discard(video_id)
+
+    def prewarm_stream_prefix_sync(self, video_id: str) -> dict:
+        self._bump_prefix_metric("prewarm_requests")
+
+        existing_size = self.get_prefix_cache_size(video_id, touch=True)
+        if existing_size is not None:
+            return {"ok": True, "videoId": video_id, "cached": True, "bytes": existing_size}
+
+        if not self._mark_prewarm_started(video_id):
+            current_size = self.get_prefix_cache_size(video_id, touch=True)
+            return {"ok": True, "videoId": video_id, "cached": current_size is not None, "bytes": current_size or 0, "in_progress": True}
+
+        try:
+            stream_info = self.get_stream_info_sync(video_id)
+            target_bytes = self.get_prefix_cache_target_bytes(stream_info)
+            upstream = self._http.get(
+                stream_info["stream_url"],
+                headers={"Range": f"bytes=0-{target_bytes - 1}"},
+                stream=True,
+                timeout=(5, 20),
+            )
+            upstream.raise_for_status()
+
+            writer, part_path = self.open_prefix_cache_writer(video_id, target_bytes)
+            if writer is None:
+                cached_size = self.get_prefix_cache_size(video_id, touch=True) or 0
+                self._bump_prefix_metric("prewarm_successes")
+                return {"ok": True, "videoId": video_id, "cached": True, "bytes": cached_size}
+
+            bytes_written = 0
+            try:
+                for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    slice_ = chunk[: target_bytes - bytes_written]
+                    if slice_:
+                        writer.write(slice_)
+                        bytes_written += len(slice_)
+                    if bytes_written >= target_bytes:
+                        break
+            finally:
+                try:
+                    writer.flush()
+                    writer.close()
+                except Exception:
+                    pass
+                upstream.close()
+
+            self.finalize_prefix_cache(video_id, part_path, bytes_written)
+            self._bump_prefix_metric("prewarm_successes")
+            return {"ok": True, "videoId": video_id, "cached": bytes_written > 0, "bytes": bytes_written}
+        except Exception as exc:
+            self._bump_prefix_metric("prewarm_failures")
+            logger.warning("Prewarm prefix cache failed video_id=%s err=%s", video_id, exc)
+            raise
+        finally:
+            self._mark_prewarm_finished(video_id)
+
+    async def prewarm_stream_prefix(self, video_id: str) -> dict:
+        return await asyncio.to_thread(self.prewarm_stream_prefix_sync, video_id)
+
     @staticmethod
     def _extract_url_from_format(fmt: dict) -> str | None:
         url = fmt.get("url")
@@ -627,6 +819,8 @@ class MusicService:
             "duration": info.get("duration"),
             "stream_url": stream_url,
             "format_id": chosen_format,
+            "bitrate": best_format.get("abr") or best_format.get("tbr") or best_format.get("vbr") or 0,
+            "mime_type": best_format.get("ext"),
         }
         self._set_cached_stream_info(video_id, payload)
         return payload

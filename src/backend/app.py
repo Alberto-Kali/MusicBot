@@ -3,6 +3,7 @@ import os
 import hashlib
 import hmac
 import json
+import re
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -57,6 +58,68 @@ def _safe_remove(path: str) -> None:
         Path(path).unlink(missing_ok=True)
     except Exception:
         logger.warning("Не удалось удалить временный файл: %s", path)
+
+
+_CONTENT_RANGE_RE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", re.IGNORECASE)
+
+
+def _parse_range_start(range_header: str | None) -> int | None:
+    if not range_header:
+        return None
+    match = re.match(r"bytes=(\d*)-(\d*)", range_header.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    start = match.group(1)
+    if start == "":
+        return 0
+    if start.isdigit():
+        return int(start)
+    return None
+
+
+def _extract_total_size(content_range: str | None) -> int | None:
+    if not content_range:
+        return None
+    match = _CONTENT_RANGE_RE.match(content_range.strip())
+    if not match:
+        return None
+    total = match.group(3)
+    return int(total) if total.isdigit() else None
+
+
+def _prefixed_stream(prefix_path: Path, upstream, chunk_size: int = 64 * 1024):
+    with prefix_path.open("rb") as cached_prefix:
+        while True:
+            chunk = cached_prefix.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    yield from upstream.iter_content(chunk_size=chunk_size)
+
+
+def _stream_and_fill_prefix_cache(upstream, service: MusicService, video_id: str, target_bytes: int, chunk_size: int = 64 * 1024):
+    writer, part_path = service.open_prefix_cache_writer(video_id, target_bytes)
+    bytes_written = 0
+    try:
+        for chunk in upstream.iter_content(chunk_size=chunk_size):
+            if writer and bytes_written < target_bytes:
+                cache_chunk = chunk[: target_bytes - bytes_written]
+                if cache_chunk:
+                    writer.write(cache_chunk)
+                    bytes_written += len(cache_chunk)
+                    if bytes_written >= target_bytes:
+                        writer.flush()
+                        writer.close()
+                        writer = None
+            yield chunk
+    finally:
+        if writer:
+            try:
+                writer.flush()
+                writer.close()
+            except Exception:
+                pass
+        service.finalize_prefix_cache(video_id, part_path, bytes_written)
 
 
 class TelegramAuthPayload(BaseModel):
@@ -327,6 +390,19 @@ async def get_direct_stream(video_id: str):
     }
 
 
+@app.post("/api/v1/prewarm/{video_id}")
+async def prewarm_track(video_id: str):
+    try:
+        return await _service().prewarm_stream_prefix(video_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ошибка prewarm stream cache: {exc}") from exc
+
+
+@app.get("/api/v1/cache-metrics")
+async def cache_metrics():
+    return {"prefix_cache": _service().get_prefix_cache_metrics()}
+
+
 @app.get("/api/v1/stream/{video_id}.mp3")
 async def stream_track(video_id: str, request: Request):
     try:
@@ -334,8 +410,14 @@ async def stream_track(video_id: str, request: Request):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Ошибка stream URL: {exc}") from exc
 
+    range_start = _parse_range_start(request.headers.get("range"))
+    prefix_cache_size = _service().get_prefix_cache_size(video_id, touch=True)
+    can_use_prefix_cache = prefix_cache_size is not None and (range_start is None or range_start == 0)
+
     headers = {}
-    if request.headers.get("range"):
+    if can_use_prefix_cache:
+        headers["Range"] = f"bytes={prefix_cache_size}-"
+    elif request.headers.get("range"):
         headers["Range"] = request.headers["range"]
 
     try:
@@ -356,14 +438,31 @@ async def stream_track(video_id: str, request: Request):
         "Accept-Ranges": upstream.headers.get("Accept-Ranges", "bytes"),
         "Cache-Control": "public, max-age=60",
     }
-    if upstream.headers.get("Content-Range"):
-        pass_headers["Content-Range"] = upstream.headers["Content-Range"]
-    if upstream.headers.get("Content-Length"):
-        pass_headers["Content-Length"] = upstream.headers["Content-Length"]
+    response_status = upstream.status_code
+    response_stream = upstream.iter_content(chunk_size=64 * 1024)
+
+    if can_use_prefix_cache:
+        prefix_path = _service()._prefix_cache_path(video_id)
+        total_size = _extract_total_size(upstream.headers.get("Content-Range"))
+        if total_size is not None:
+            pass_headers["Content-Length"] = str(total_size)
+            if range_start == 0:
+                pass_headers["Content-Range"] = f"bytes 0-{total_size - 1}/{total_size}"
+                response_status = 206
+            else:
+                response_status = 200
+        response_stream = _prefixed_stream(prefix_path, upstream)
+    else:
+        target_bytes = _service().get_prefix_cache_target_bytes(stream_info)
+        response_stream = _stream_and_fill_prefix_cache(upstream, _service(), video_id, target_bytes)
+        if upstream.headers.get("Content-Range"):
+            pass_headers["Content-Range"] = upstream.headers["Content-Range"]
+        if upstream.headers.get("Content-Length"):
+            pass_headers["Content-Length"] = upstream.headers["Content-Length"]
 
     return StreamingResponse(
-        upstream.iter_content(chunk_size=64 * 1024),
-        status_code=upstream.status_code,
+        response_stream,
+        status_code=response_status,
         headers=pass_headers,
         media_type="audio/mpeg",
         background=BackgroundTask(upstream.close),
