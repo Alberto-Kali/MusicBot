@@ -72,6 +72,7 @@ const formatDuration = (seconds?: number | null) => {
 
 const streamUrl = (videoId: string) => `${apiBase}/api/v1/stream/${encodeURIComponent(videoId)}.mp3`
 const directStreamUrl = (videoId: string) => `${apiBase}/api/v1/direct-stream/${encodeURIComponent(videoId)}`
+const prewarmStreamUrl = (videoId: string) => `${apiBase}/api/v1/prewarm/${encodeURIComponent(videoId)}`
 
 const parseTelegramUserFromInitData = (initData: string): { id?: number; username?: string } => {
   try {
@@ -121,6 +122,20 @@ const setAudioSource = async (src: string, mode: 'direct' | 'proxy', autoplay: b
   }
 }
 
+const prewarmTrack = async (videoId: string | undefined) => {
+  if (!videoId) return
+  try {
+    await fetch(prewarmStreamUrl(videoId), { method: 'POST' })
+  } catch {
+    // prewarm — best effort
+  }
+}
+
+const prewarmNextTrack = () => {
+  const nextTrack = queue.value[currentIndex.value + 1]
+  void prewarmTrack(nextTrack?.videoId)
+}
+
 const setCurrentIndex = async (index: number, autoplay = true) => {
   if (index < 0 || index >= queue.value.length) return
   const track = queue.value[index]
@@ -132,21 +147,31 @@ const setCurrentIndex = async (index: number, autoplay = true) => {
   duration.value = track.duration ?? 0
   trackInLibrary.value = false
   try {
-    const primaryUrl = await resolvePrimaryAudioUrl(track.videoId)
+    await setAudioSource(streamUrl(track.videoId), 'proxy', autoplay)
     if (streamLoadToken.value !== loadToken) return
-    await setAudioSource(primaryUrl, 'direct', autoplay)
   } catch {
     if (streamLoadToken.value !== loadToken) return
-    await setAudioSource(streamUrl(track.videoId), 'proxy', autoplay)
+    try {
+      const primaryUrl = await resolvePrimaryAudioUrl(track.videoId)
+      await setAudioSource(primaryUrl, 'direct', autoplay)
+    } catch {
+      error.value = 'Не удалось запустить трек ни через backend stream, ни через direct stream.'
+    }
   }
   syncCurrentTrackLibraryState()
+  prewarmNextTrack()
 }
 
 const onAudioError = async () => {
   const track = currentTrack.value
   if (!track) return
-  if (audioSourceMode.value === 'direct') {
-    await setAudioSource(streamUrl(track.videoId), 'proxy', true)
+  if (audioSourceMode.value === 'proxy') {
+    try {
+      const directUrl = await resolvePrimaryAudioUrl(track.videoId)
+      await setAudioSource(directUrl, 'direct', true)
+    } catch {
+      error.value = 'Не удалось воспроизвести трек даже через резервный direct stream.'
+    }
     return
   }
   error.value = 'Не удалось воспроизвести трек даже через резервный backend stream.'
