@@ -1,5 +1,15 @@
 name: music
 
+x-proxy-env: &proxy-env
+  ALL_PROXY: ${SOCKS5_PROXY:-}
+  all_proxy: ${SOCKS5_PROXY:-}
+  HTTP_PROXY: ${SOCKS5_PROXY:-}
+  http_proxy: ${SOCKS5_PROXY:-}
+  HTTPS_PROXY: ${SOCKS5_PROXY:-}
+  https_proxy: ${SOCKS5_PROXY:-}
+  NO_PROXY: ${CONTAINER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,backend,telegram-bot,telegram-webapp}
+  no_proxy: ${CONTAINER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,backend,telegram-bot,telegram-webapp}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,6 +19,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-music_bot}
       POSTGRES_USER: ${POSTGRES_USER:-music}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      <<: *proxy-env
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-music} -d ${POSTGRES_DB:-music_bot}"]
       interval: 5s
@@ -26,6 +37,7 @@ services:
     environment:
       BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
       BACKEND_PORT: ${BACKEND_PORT:-8080}
+      <<: *proxy-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,6 +55,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_started
+    environment:
+      <<: *proxy-env
     restart: unless-stopped
 
   telegram-webapp:
@@ -50,6 +64,8 @@ services:
     depends_on:
       backend:
         condition: service_started
+    environment:
+      <<: *proxy-env
     ports:
       - "3000:80"
     restart: unless-stopped
