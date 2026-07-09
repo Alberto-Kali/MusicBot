@@ -4,7 +4,7 @@ set -eu
 PROJECT="music-bot"
 CARRIER_ID="backend-kvm"
 GATEWAY_ID="pconf-bus"
-SUBDOMAIN="music-bot"
+SUBDOMAIN="music"
 DOMAIN="pconf.ru"
 FRP_PROXY="music_bot_backend_kvm_pconf_bus_3123"
 DESIRED_STATE="present"

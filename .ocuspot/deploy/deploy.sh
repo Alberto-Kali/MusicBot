@@ -2,7 +2,7 @@
 set -eu
 # Ocuspot deploy bundle for project=music-bot
 # Immutable image: __OCUSPOT_IMAGE__
-# Binding: backend-kvm@pconf-bus  frp=music_bot_backend_kvm_pconf_bus_3123  public=music-bot.pconf.ru
+# Binding: backend-kvm@pconf-bus  frp=music_bot_backend_kvm_pconf_bus_3123  public=music.pconf.ru
 
 # SAFETY: This script performs scp + ssh using your runtime credentials only.
 # - Run with ssh-agent loaded, or edit below to pass -i /path/to/your/key.
@@ -139,8 +139,8 @@ true'
 ocuspot_cleanup_gateway() {
   echo "Cleanup: gateway Ocuspot-managed resources for ${DEPLOY_SVC} ..."
   gw_ssh -p "${GW_PORT}" -o StrictHostKeyChecking=accept-new "${GW_USER}@${GW_HOST}" 'set +e
-rm -f "/etc/nginx/conf.d/ocuspot-music-bot.pconf.ru.conf" "/etc/nginx/conf.d/ocuspot-music-bot.pconf.ru.conf" 2>/dev/null || true
-find /etc/nginx/fastpanel2-sites -maxdepth 2 -type f -name "ocuspot-music-bot.pconf.ru.conf" -delete 2>/dev/null || true
+rm -f "/etc/nginx/conf.d/ocuspot-music.pconf.ru.conf" "/etc/nginx/conf.d/ocuspot-music.pconf.ru.conf" 2>/dev/null || true
+find /etc/nginx/fastpanel2-sites -maxdepth 2 -type f -name "ocuspot-music.pconf.ru.conf" -delete 2>/dev/null || true
 if command -v nginx >/dev/null 2>&1; then nginx -t >/dev/null 2>&1 && (systemctl reload nginx 2>/dev/null || service nginx reload 2>/dev/null || nginx -s reload 2>/dev/null || true); fi
 	true'
 }
@@ -180,7 +180,7 @@ GW_USER="root"
 GW_FRAG='frps.gateway.pconf-bus.toml'
 GW_FULL='frps.gateway.pconf-bus.managed.toml'
 GW_UNIT='systemd.ocuspot-frps-pconf-bus.service'
-PUBLIC_HOST='music-bot.pconf.ru'
+PUBLIC_HOST='music.pconf.ru'
 PUBLIC_PORT=80
 FRP_BIND_PORT=2334
 FRP_VHOST_HTTP_PORT=8088
@@ -201,9 +201,9 @@ done
 if command -v grep >/dev/null 2>&1; then
  GREP_RSL="grep -Rsl"
  if command -v timeout >/dev/null 2>&1; then GREP_RSL="timeout 10s grep -Rsl"; fi
- OTHER="$(${GREP_RSL} '\''server_name[[:space:]]\+music-bot.pconf.ru\([[:space:];]\|$\)'\'' /etc/nginx/conf.d /etc/nginx/fastpanel2-sites /etc/nginx/fastpanel2-available 2>/dev/null | grep -v '\''/etc/nginx/conf.d/ocuspot-music-bot.pconf.ru.conf'\'' | grep -v '\''/etc/nginx/conf.d/ocuspot-music-bot.pconf.ru.conf'\'' | grep -v '\''ocuspot-music-bot.pconf.ru.conf'\'' || true)"
+ OTHER="$(${GREP_RSL} '\''server_name[[:space:]]\+music.pconf.ru\([[:space:];]\|$\)'\'' /etc/nginx/conf.d /etc/nginx/fastpanel2-sites /etc/nginx/fastpanel2-available 2>/dev/null | grep -v '\''/etc/nginx/conf.d/ocuspot-music.pconf.ru.conf'\'' | grep -v '\''/etc/nginx/conf.d/ocuspot-music.pconf.ru.conf'\'' | grep -v '\''ocuspot-music.pconf.ru.conf'\'' || true)"
   if [ -n "${OTHER}" ]; then
-    echo "Conflicting nginx server_name for public host music-bot.pconf.ru (checked after SSH contact): ${OTHER}"
+    echo "Conflicting nginx server_name for public host music.pconf.ru (checked after SSH contact): ${OTHER}"
     exit 19
   fi
 fi
@@ -266,7 +266,7 @@ if [ -f /tmp/ocuspot-frps ]; then install -m 0755 /tmp/ocuspot-frps /usr/local/b
   if ! command -v nginx >/dev/null 2>&1; then echo "nginx is required on gateway for public HTTP routing"; exit 16; fi
   mkdir -p /etc/nginx/conf.d
   NGINX_TARGET_DIR="/etc/nginx/conf.d"
-  NGINX_TARGET_FILE="/etc/nginx/conf.d/ocuspot-music-bot.pconf.ru.conf"
+  NGINX_TARGET_FILE="/etc/nginx/conf.d/ocuspot-music.pconf.ru.conf"
   if [ -d /etc/nginx/fastpanel2-available ] && [ -d /etc/nginx/fastpanel2-sites ]; then
     BASE_DOMAIN="pconf.ru"
     if [ -n "${BASE_DOMAIN}" ]; then
@@ -275,7 +275,7 @@ if [ -f /tmp/ocuspot-frps ]; then install -m 0755 /tmp/ocuspot-frps /usr/local/b
         PANEL_USER="$(basename "$(dirname "${PANEL_SITE}")")"
         NGINX_TARGET_DIR="/etc/nginx/fastpanel2-sites/${PANEL_USER}"
         mkdir -p "${NGINX_TARGET_DIR}"
-        NGINX_TARGET_FILE="${NGINX_TARGET_DIR}/ocuspot-music-bot.pconf.ru.conf"
+        NGINX_TARGET_FILE="${NGINX_TARGET_DIR}/ocuspot-music.pconf.ru.conf"
       fi
     fi
   fi
@@ -300,7 +300,7 @@ OCUSPOT_DEFAULT_404
 cat > "${NGINX_TARGET_FILE}" <<OCUSPOT_NGINX
 server {
 listen 80;
-server_name music-bot.pconf.ru;
+server_name music.pconf.ru;
 
     location / {
         proxy_http_version 1.1;
@@ -503,17 +503,17 @@ echo "Carrier local health failed: workload not responding on http://127.0.0.1:3
 exit 17'
   echo "Health check 2/4: gateway FRP vhost http://127.0.0.1:8088/healthz with Host ${PUBLIC_HOST} ..."
   gw_ssh -p "${GW_PORT}" -o StrictHostKeyChecking=accept-new "${GW_USER}@${GW_HOST}" 'set -eu
-if curl -fsS --max-time 10 -H '\''Host: music-bot.pconf.ru'\'' http://127.0.0.1:8088/healthz >/dev/null 2>&1 || wget -qO- -T 10 --header='\''Host: music-bot.pconf.ru'\'' http://127.0.0.1:8088/healthz >/dev/null 2>&1; then
+if curl -fsS --max-time 10 -H '\''Host: music.pconf.ru'\'' http://127.0.0.1:8088/healthz >/dev/null 2>&1 || wget -qO- -T 10 --header='\''Host: music.pconf.ru'\'' http://127.0.0.1:8088/healthz >/dev/null 2>&1; then
   exit 0
 fi
-echo "Gateway FRP vhost health failed: frps did not serve Host music-bot.pconf.ru on http://127.0.0.1:8088/healthz (checked after remote rollout)."
+echo "Gateway FRP vhost health failed: frps did not serve Host music.pconf.ru on http://127.0.0.1:8088/healthz (checked after remote rollout)."
 exit 17'
   echo "Health check 3/4: gateway nginx proxy for Host ${PUBLIC_HOST} (after nginx config) ..."
   gw_ssh -p "${GW_PORT}" -o StrictHostKeyChecking=accept-new "${GW_USER}@${GW_HOST}" 'set -eu
-if curl -fsS --max-time 10 -H '\''Host: music-bot.pconf.ru'\'' http://127.0.0.1/healthz >/dev/null 2>&1 || wget -qO- -T 10 --header='\''Host: music-bot.pconf.ru'\'' http://127.0.0.1/healthz >/dev/null 2>&1; then
+if curl -fsS --max-time 10 -H '\''Host: music.pconf.ru'\'' http://127.0.0.1/healthz >/dev/null 2>&1 || wget -qO- -T 10 --header='\''Host: music.pconf.ru'\'' http://127.0.0.1/healthz >/dev/null 2>&1; then
   exit 0
 fi
-echo "Gateway HTTP proxy health failed: nginx did not route Host music-bot.pconf.ru tunneled backend (checked after remote rollout)."
+echo "Gateway HTTP proxy health failed: nginx did not route Host music.pconf.ru tunneled backend (checked after remote rollout)."
 exit 17'
   echo "Health check 4/4: public endpoint http://${PUBLIC_HOST}/healthz (DNS + routing; best-effort unless OCUSPOT_REQUIRE_PUBLIC_HEALTH=1) ..."
   PUBLIC_IPS="$(getent ahostsv4 "${PUBLIC_HOST}" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"

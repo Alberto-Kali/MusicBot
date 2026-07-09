@@ -1,17 +1,4 @@
-name: music
-
-x-proxy-env: &proxy-env
-  ALL_PROXY: ${SOCKS5_PROXY:-}
-  all_proxy: ${SOCKS5_PROXY:-}
-  HTTP_PROXY: ${SOCKS5_PROXY:-}
-  http_proxy: ${SOCKS5_PROXY:-}
-  HTTPS_PROXY: ${SOCKS5_PROXY:-}
-  https_proxy: ${SOCKS5_PROXY:-}
-  NO_PROXY: ${CONTAINER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,backend,telegram-bot,telegram-webapp}
-  no_proxy: ${CONTAINER_NO_PROXY:-localhost,127.0.0.1,::1,postgres,backend,telegram-bot,telegram-webapp}
-
-x-host-gateway: &host-gateway
-  - "host.docker.internal:host-gateway"
+version: "3.8"
 
 services:
   postgres:
@@ -36,11 +23,9 @@ services:
     env_file:
       - .env
       - .env.secrets.backend
-    extra_hosts: *host-gateway
     environment:
       BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
       BACKEND_PORT: ${BACKEND_PORT:-8080}
-      <<: *proxy-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,24 +38,18 @@ services:
     env_file:
       - .env
       - .env.secrets.bot
-    extra_hosts: *host-gateway
     depends_on:
       postgres:
         condition: service_healthy
       backend:
         condition: service_started
-    environment:
-      <<: *proxy-env
     restart: unless-stopped
 
   telegram-webapp:
     image: ghcr.io/alberto-kali/musicbot-telegram-webapp:sha-6d0fbe8e99f10cf8e915dfd643f875b89be9e58c
-    extra_hosts: *host-gateway
     depends_on:
       backend:
         condition: service_started
-    environment:
-      <<: *proxy-env
     ports:
       - "3123:80"
     restart: unless-stopped

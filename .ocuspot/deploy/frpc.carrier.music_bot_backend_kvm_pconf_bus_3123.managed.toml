@@ -8,4 +8,4 @@ auth.token = "__OCUSPOT_AUTH_TOKEN__"
 name = "music_bot_backend_kvm_pconf_bus_3123"
 type = "http"
 localPort = 3123
-subdomain = "music-bot"
+subdomain = "music"

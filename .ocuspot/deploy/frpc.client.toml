@@ -11,4 +11,4 @@ auth.token = "${OCUSPOT_FRP_PCONF_BUS}"
 name = "music-bot"
 type = "http"
 localPort = 3123
-subdomain = "music-bot"
+subdomain = "music"

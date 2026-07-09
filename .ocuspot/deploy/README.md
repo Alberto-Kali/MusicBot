@@ -1,6 +1,6 @@
 # Ocuspot deployment
 
-Project: music-bot
+Project: Music-Bot
 
 The built-in project contract is container-first. The default runtime is a
 single OCI image built from a local Dockerfile and shipped by GitLab CI.

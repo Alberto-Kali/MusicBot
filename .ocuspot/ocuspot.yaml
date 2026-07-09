@@ -1,6 +1,6 @@
 version: 1
 project:
-  name: "music-bot"
+  name: "Music-Bot"
   slug: "music-bot"
 repositories:
   gitlab:
@@ -20,7 +20,7 @@ deployment:
   enabled: true
   container_host: "backend-kvm"
   gateway: "pconf-bus"
-  subdomain: "music-bot"
+  subdomain: "music"
   runtime: "docker-compose"
   service_port: 3123
   compose_file: "docker-compose.yml"
