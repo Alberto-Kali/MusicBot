@@ -121,10 +121,20 @@ sync-github:
   script:
     - |
       set -e
-      git commit --amend --no-edit --trailer "Ocuspot-Mirror: gitlab-to-github" || true
-      git remote add github "https://oauth2:$OCUSPOT_GITHUB_TOKEN@github.com/Alberto-Kali/MusicBot.git" || true
+      git config user.email "${GITLAB_USER_EMAIL:-ocuspot-ci@users.noreply.gitlab.com}"
+      git config user.name "${GITLAB_USER_NAME:-Ocuspot CI}"
+      if ! git log -1 --pretty=%B | grep -F "Ocuspot-Mirror: gitlab-to-github" >/dev/null 2>&1; then
+        git commit --amend --no-edit --trailer "Ocuspot-Mirror: gitlab-to-github" || true
+      fi
+      git remote remove github 2>/dev/null || true
+      git remote add github "https://oauth2:${OCUSPOT_GITHUB_TOKEN}@github.com/Alberto-Kali/MusicBot.git"
       git fetch github main || true
-      git push github HEAD:refs/heads/main
+      if git show-ref --verify --quiet refs/remotes/github/main; then
+        LEASE="$(git rev-parse refs/remotes/github/main)"
+        git push --force-with-lease=refs/heads/main:${LEASE} github HEAD:refs/heads/main
+      else
+        git push github HEAD:refs/heads/main
+      fi
 
 deploy-carrier:
   stage: deploy

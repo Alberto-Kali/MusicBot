@@ -122,11 +122,16 @@ ocuspot_cleanup_carrier() {
   car_ssh -p "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${CAR_USER}@${CAR_HOST}" 'set +e
 COMPOSE_DIR="/opt/ocuspot/apps/music_bot_backend_kvm_pconf_bus_3123"
 if [ -d "${COMPOSE_DIR}" ]; then
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    docker compose -f "${COMPOSE_DIR}/docker-compose.yaml" down --remove-orphans 2>/dev/null || true
-  elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose -f "${COMPOSE_DIR}/docker-compose.yaml" down --remove-orphans 2>/dev/null || true
-  fi
+  for COMPOSE_CANDIDATE in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+    if [ -f "${COMPOSE_DIR}/${COMPOSE_CANDIDATE}" ]; then
+      if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        docker compose -f "${COMPOSE_DIR}/${COMPOSE_CANDIDATE}" down --remove-orphans 2>/dev/null || true
+      elif command -v docker-compose >/dev/null 2>&1; then
+        docker-compose -f "${COMPOSE_DIR}/${COMPOSE_CANDIDATE}" down --remove-orphans 2>/dev/null || true
+      fi
+      break
+    fi
+  done
 fi
 if command -v docker >/dev/null 2>&1; then docker rm -f "music_bot_backend_kvm_pconf_bus_3123" 2>/dev/null || true; fi
 if command -v podman >/dev/null 2>&1; then podman rm -f "music_bot_backend_kvm_pconf_bus_3123" 2>/dev/null || true; fi
@@ -454,13 +459,7 @@ rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
 tar -xzf '\''/tmp/ocuspot-compose.music_bot_backend_kvm_pconf_bus_3123.tar.gz'\'' -C "$WORKDIR"
 cd "$WORKDIR"
-cat > docker-compose.ocuspot.override.yaml <<'\''OCUSPOT_COMPOSE_OVERRIDE'\''
-services:
-  app:
-    ports:
-      - "127.0.0.1:3123:3123"
 
-OCUSPOT_COMPOSE_OVERRIDE
 if command -v docker >/dev/null 2>&1; then
  PORT_CONTAINERS="$(docker ps --filter publish=3123 --format '\''{{.ID}}'\'' 2>/dev/null | tr '\''\n'\'' '\'' '\'' || true)"
  if [ -n "${PORT_CONTAINERS}" ]; then
@@ -469,9 +468,9 @@ if command -v docker >/dev/null 2>&1; then
  fi
 fi
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-docker compose -f '\''docker-compose.yml'\'' -f docker-compose.ocuspot.override.yaml up -d --build --force-recreate --remove-orphans
+docker compose -f '\''docker-compose.yml'\'' up -d --build --force-recreate --remove-orphans
 elif command -v docker-compose >/dev/null 2>&1; then
-  docker-compose -f '\''docker-compose.yml'\'' -f docker-compose.ocuspot.override.yaml up -d --build --force-recreate --remove-orphans
+docker-compose -f '\''docker-compose.yml'\'' up -d --build --force-recreate --remove-orphans
 else
 echo "Compose CLI missing on carrier"
 exit 15
