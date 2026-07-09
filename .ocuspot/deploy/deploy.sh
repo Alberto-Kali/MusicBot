@@ -459,6 +459,51 @@ rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
 tar -xzf '\''/tmp/ocuspot-compose.music_bot_backend_kvm_pconf_bus_3123.tar.gz'\'' -C "$WORKDIR"
 cd "$WORKDIR"
+COMPOSE_FILE='\''docker-compose.yml'\''
+COMPOSE_DIR="$(dirname "$COMPOSE_FILE")"
+if [ -f "$COMPOSE_FILE" ]; then
+  awk '\''
+    function emit(line) {
+      sub(/[[:space:]]*#.*/, "", line)
+      gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", line)
+      if (line != "") print line
+    }
+    /^[[:space:]]*env_file:[[:space:]]*$/ {
+      in_env = 1
+      base = match($0, /[^[:space:]]/) - 1
+      next
+    }
+    in_env {
+      if ($0 ~ /^[[:space:]]*-/) {
+        line = $0
+        sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+        emit(line)
+        next
+      }
+      if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+      indent = match($0, /[^[:space:]]/) - 1
+      if (indent <= base) in_env = 0
+    }
+    /^[[:space:]]*env_file:[[:space:]]*[^#[:space:]]/ {
+      line = $0
+      sub(/^[[:space:]]*env_file:[[:space:]]*/, "", line)
+      emit(line)
+    }
+  '\'' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
+    case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
+    target="${COMPOSE_DIR}/${env_file}"
+    if [ ! -f "$target" ]; then
+      if [ -f "${target}.example" ]; then
+        cp "${target}.example" "$target"
+      else
+        mkdir -p "$(dirname "$target")"
+        touch "$target"
+      fi
+      echo "Created compose env_file placeholder on carrier: ${env_file}"
+    fi
+  done
+fi
+
 
 if command -v docker >/dev/null 2>&1; then
  PORT_CONTAINERS="$(docker ps --filter publish=3123 --format '\''{{.ID}}'\'' 2>/dev/null | tr '\''\n'\'' '\'' '\'' || true)"
