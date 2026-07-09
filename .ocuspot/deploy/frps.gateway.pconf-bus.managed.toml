@@ -1,0 +1,7 @@
+# Ocuspot-managed shared frps config for gateway pconf-bus
+bindPort = 2334
+vhostHTTPPort = 8088
+subDomainHost = "pconf.ru"
+custom404Page = "/etc/ocuspot/gateway/404.html"
+auth.method = "token"
+auth.token = "__OCUSPOT_AUTH_TOKEN__"
