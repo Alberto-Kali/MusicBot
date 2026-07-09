@@ -504,6 +504,98 @@ if [ -f "$COMPOSE_FILE" ]; then
   done
 fi
 
+COMPOSE_FILE='\''docker-compose.yml'\''
+COMPOSE_SANITIZED_FILE='\''docker-compose.ocuspot.sanitized.yml'\''
+COMPOSE_ALLOWED_PUBLISHED_PORTS='\''3123 '\''
+awk -v allowed_ports="$COMPOSE_ALLOWED_PUBLISHED_PORTS" '\''
+function lead(s, i, c) {
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c != " ") return i - 1
+  }
+  return length(s)
+}
+function trim(s) {
+  gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+  return s
+}
+function allowed(port, parts, i) {
+  split(allowed_ports, parts, " ")
+  for (i in parts) if (parts[i] == port) return 1
+  return 0
+}
+function isnum(s) { return s ~ /^[0-9]+$/ }
+function flush_ports(i) {
+  if (!in_ports) return
+  if (kept_count > 0) {
+    print ports_line
+    for (i = 1; i <= kept_count; i++) print kept[i]
+  } else if (expose_count > 0) {
+    print ports_prefix "expose:"
+    for (i = 1; i <= expose_count; i++) print exposed[i]
+  }
+  delete kept
+  delete exposed
+  kept_count = 0
+  expose_count = 0
+  in_ports = 0
+}
+function handle_port_line(line, trimmed, value, n, parts, published, target, child_prefix) {
+  trimmed = trim(line)
+  if (trimmed !~ /^-/) {
+    kept[++kept_count] = line
+    return
+  }
+  value = trim(substr(trimmed, 2))
+  if (substr(value, 1, 1) == "\"") value = substr(value, 2)
+  if (substr(value, length(value), 1) == "\"") value = substr(value, 1, length(value)-1)
+  sub(/\/(tcp|udp)$/, "", value)
+  n = split(value, parts, ":")
+  if (n == 1) {
+    kept[++kept_count] = line
+    return
+  }
+  if (n == 2) {
+    published = parts[1]
+    target = parts[2]
+  } else {
+    published = parts[n-1]
+    target = parts[n]
+  }
+  gsub(/[^0-9]/, "", published)
+  gsub(/[^0-9]/, "", target)
+  if (!isnum(published) || allowed(published)) {
+    kept[++kept_count] = line
+    return
+  }
+  if (isnum(target)) {
+    child_prefix = ports_prefix "  "
+    exposed[++expose_count] = child_prefix "- \"" target "\""
+  }
+  print "Ocuspot compose port sanitizer: removed source-published port " published " from " COMPOSE_FILE > "/dev/stderr"
+}
+{
+  indent = lead($0)
+  trimmed = trim($0)
+  if (in_ports && trimmed != "" && indent <= ports_indent && trimmed !~ /^#/) {
+    flush_ports()
+  }
+  if (!in_ports && trimmed == "ports:") {
+    in_ports = 1
+    ports_line = $0
+    ports_indent = indent
+    ports_prefix = substr($0, 1, indent)
+    next
+  }
+  if (in_ports) {
+    handle_port_line($0)
+    next
+  }
+  print
+}
+END { flush_ports() }
+'\'' "$COMPOSE_FILE" > "$COMPOSE_SANITIZED_FILE"
+
 
 if command -v docker >/dev/null 2>&1; then
  PORT_CONTAINERS="$(docker ps --filter publish=3123 --format '\''{{.ID}}'\'' 2>/dev/null | tr '\''\n'\'' '\'' '\'' || true)"
@@ -513,9 +605,9 @@ if command -v docker >/dev/null 2>&1; then
  fi
 fi
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-docker compose -f '\''docker-compose.yml'\'' up -d --build --force-recreate --remove-orphans
+docker compose -f '\''docker-compose.ocuspot.sanitized.yml'\'' up -d --build --force-recreate --remove-orphans
 elif command -v docker-compose >/dev/null 2>&1; then
-docker-compose -f '\''docker-compose.yml'\'' up -d --build --force-recreate --remove-orphans
+docker-compose -f '\''docker-compose.ocuspot.sanitized.yml'\'' up -d --build --force-recreate --remove-orphans
 else
 echo "Compose CLI missing on carrier"
 exit 15

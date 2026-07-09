@@ -15,26 +15,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Log in to GHCR
-        if: github.event_name == 'push'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build GHCR image
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > /tmp/ocuspot-ghcr-targets <<'OCUSPOT_GHCR_TARGETS'
-          ghcr.io/alberto-kali/musicbot|.|Dockerfile
-          OCUSPOT_GHCR_TARGETS
-          while IFS='|' read -r image context dockerfile; do
-            [ -n "$image" ] || continue
-            docker build --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" -t "${image}:${GITHUB_SHA}" -f "$dockerfile" "$context"
-            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-              docker push "${image}:${GITHUB_SHA}"
-              docker tag "${image}:${GITHUB_SHA}" "${image}:main"
-              docker push "${image}:main"
-            fi
-          done < /tmp/ocuspot-ghcr-targets
+      - name: No declared Docker images
+        run: echo "No root Dockerfile or compose service Dockerfiles declared by Ocuspot."
