@@ -19,8 +19,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for f in .env .env.secrets.*; do
-            [ -f "${f}.example" ] && [ ! -f "$f" ] && cp "${f}.example" "$f" || true
+          for example in .env.example .env.*.example; do
+            [ -f "$example" ] || continue
+            target="${example%.example}"
+            [ -f "$target" ] || cp "$example" "$target"
+          done
+          COMPOSE_FILE="docker-compose.yml"
+          awk '
+            function emit(line) {
+              sub(/[[:space:]]*#.*/, "", line)
+              gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", line)
+              if (line != "") print line
+            }
+            /^[[:space:]]*env_file:[[:space:]]*$/ { in_env = 1; base = match($0, /[^[:space:]]/) - 1; next }
+            in_env {
+              if ($0 ~ /^[[:space:]]*-/) { line = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", line); emit(line); next }
+              if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+              indent = match($0, /[^[:space:]]/) - 1
+              if (indent <= base) in_env = 0
+            }
+            /^[[:space:]]*env_file:[[:space:]]*[^#[:space:]]/ { line = $0; sub(/^[[:space:]]*env_file:[[:space:]]*/, "", line); emit(line) }
+          ' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
+            case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
+            [ -f "$env_file" ] && continue
+            if [ -f "${env_file}.example" ]; then cp "${env_file}.example" "$env_file"; else mkdir -p "$(dirname "$env_file")"; touch "$env_file"; fi
           done
       - name: Log in to GHCR
         if: github.event_name == 'push'
