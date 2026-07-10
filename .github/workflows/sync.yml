@@ -75,7 +75,7 @@ jobs:
           git fetch gitlab || true
 
           git checkout -B "$BRANCH"
-          git push gitlab "$BRANCH:$BRANCH" --force-with-lease
+          git push gitlab "$BRANCH:$BRANCH"
 
       - name: Open or update GitLab MR for review (github contribution enters via MR gate)
         if: steps.loop_guard.outputs.skip != 'true'
