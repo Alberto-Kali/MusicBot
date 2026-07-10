@@ -164,32 +164,11 @@ build-image:
     paths:
       - ocuspot-image.tar
 
-build-service-ghcr:
-  stage: build
-  image: docker:stable
-  services:
-    - docker:dind
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "backend"'
-    - if: '$CI_COMMIT_BRANCH == "telegram-bot"'
-    - if: '$CI_COMMIT_BRANCH == "telegram-webapp"'
-  script:
-    - |
-      set -e
-      test -f Dockerfile
-      test -n "$OCUSPOT_GITHUB_TOKEN"
-      GHCR_OWNER="alberto-kali"
-      GHCR_REPO="musicbot"
-      service="$CI_COMMIT_BRANCH"
-      image="ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-${service}"
-      printf '%s\n' "$OCUSPOT_GITHUB_TOKEN" | docker login ghcr.io -u "$GHCR_OWNER" --password-stdin
-      docker build -t "${image}:sha-${CI_COMMIT_SHA}" -t "${image}:${service}" .
-      docker push "${image}:sha-${CI_COMMIT_SHA}"
-      docker push "${image}:${service}"
-
 build-compose-images:
   stage: build
   image: docker/compose:1.29.2
+  services:
+    - docker:dind
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       exists:
@@ -261,20 +240,20 @@ build-compose-images:
         ' .ocuspot/ci/docker-compose.yml > .ocuspot/ci/docker-compose.yml.tmp
         mv .ocuspot/ci/docker-compose.yml.tmp .ocuspot/ci/docker-compose.yml
       }
-      test -n "$OCUSPOT_GITHUB_TOKEN"
-      GHCR_OWNER="alberto-kali"
-      GHCR_REPO="musicbot"
-      printf '%s\n' "$OCUSPOT_GITHUB_TOKEN" | docker login ghcr.io -u "$GHCR_OWNER" --password-stdin
+      docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+      mkdir -p .ocuspot/branch-src
       for service in 'backend' 'telegram-bot' 'telegram-webapp'; do
         service_sha="$(git ls-remote origin "refs/heads/${service}" | awk '{print $1}')"
         test -n "$service_sha"
-        image="ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-${service}:sha-${service_sha}"
-        found=0
-        for i in $(seq 1 80); do
-          if docker manifest inspect "$image" >/dev/null 2>&1; then found=1; break; fi
-          sleep 15
-        done
-        if [ "$found" != "1" ]; then echo "GHCR image not available: $image"; exit 1; fi
+        src=".ocuspot/branch-src/${service}"
+        rm -rf "$src"
+        mkdir -p "$src"
+        git fetch origin "${service}:refs/remotes/origin/${service}"
+        git archive "origin/${service}" | tar -x -C "$src"
+        test -f "$src/Dockerfile"
+        image="${CI_REGISTRY_IMAGE}/${service}:sha-${service_sha}"
+        docker build -t "$image" "$src"
+        docker push "$image"
         rewrite_compose_service_image "$service" "$image"
       done
       docker-compose -f .ocuspot/ci/docker-compose.yml config -q
