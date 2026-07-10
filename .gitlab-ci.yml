@@ -108,8 +108,33 @@ build-compose-images:
   rules:
     - exists:
         - docker-compose.yml
+  before_script:
+    - apk add --no-cache git tar
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - .ocuspot/ci/docker-compose.yml
   script:
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - |
+      set -e
+      mkdir -p .ocuspot/branch-src .ocuspot/ci
+      cp "docker-compose.yml" .ocuspot/ci/docker-compose.yml
+      for service in 'backend' 'telegram-bot' 'telegram-webapp'; do
+        git fetch origin "${service}"
+        rm -rf ".ocuspot/branch-src/${service}"
+        mkdir -p ".ocuspot/branch-src/${service}"
+        git archive "origin/${service}" | tar -x -C ".ocuspot/branch-src/${service}"
+        docker build -t "${CI_REGISTRY_IMAGE}/${service}:${CI_COMMIT_SHA}" ".ocuspot/branch-src/${service}"
+        docker push "${CI_REGISTRY_IMAGE}/${service}:${CI_COMMIT_SHA}"
+        image="${CI_REGISTRY_IMAGE}/${service}:${CI_COMMIT_SHA}"
+        awk -v svc="$service" -v img="$image" '
+          /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/ { current=$0; sub(/^[[:space:]]*/, "", current); sub(/:.*/, "", current) }
+          current == svc && /^[[:space:]]*image:[[:space:]]*/ { sub(/image:.*/, "image: " img) }
+          { print }
+        ' .ocuspot/ci/docker-compose.yml > .ocuspot/ci/docker-compose.yml.tmp
+        mv .ocuspot/ci/docker-compose.yml.tmp .ocuspot/ci/docker-compose.yml
+      done
 
 sync-github:
   stage: sync
@@ -238,6 +263,7 @@ deploy-carrier:
     - |
       if [ -n "$OCUSPOT_SSH_PRIVATE_KEY" ]; then printf '%s\n' "$OCUSPOT_SSH_PRIVATE_KEY" > ~/.ssh/ocuspot_deploy_key && chmod 600 ~/.ssh/ocuspot_deploy_key && printf 'Host *\n IdentityFile ~/.ssh/ocuspot_deploy_key\n IdentitiesOnly yes\n StrictHostKeyChecking accept-new\n' > ~/.ssh/config; else printf 'Host *\n StrictHostKeyChecking accept-new\n' > ~/.ssh/config; fi
   script:
+    - if [ -f .ocuspot/ci/docker-compose.yml ]; then cp .ocuspot/ci/docker-compose.yml "docker-compose.yml"; fi
     - cd .ocuspot/deploy
     - sed "s|__OCUSPOT_IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deploy.sh > deploy.runtime.sh
     - chmod 700 deploy.runtime.sh

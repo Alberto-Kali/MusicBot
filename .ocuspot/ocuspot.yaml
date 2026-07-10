@@ -22,6 +22,8 @@ deployment:
   gateway: "pconf-bus"
   subdomain: "music"
   runtime: "docker-compose"
+  architecture: "branch-services"
   service_port: 3123
   compose_file: "docker-compose.yml"
   service_dirs: ""
+  service_branches: "backend,telegram-bot,telegram-webapp"
