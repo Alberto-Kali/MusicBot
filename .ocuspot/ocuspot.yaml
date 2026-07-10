@@ -22,7 +22,7 @@ deployment:
   gateway: "pconf-bus"
   subdomain: "music"
   runtime: "docker-compose"
-  architecture: "branch-services"
+  architecture: "multi-branch"
   service_port: 3123
   compose_file: "docker-compose.yml"
   service_dirs: ""

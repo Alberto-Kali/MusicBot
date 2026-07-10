@@ -118,22 +118,69 @@ build-compose-images:
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
     - |
       set -e
-      mkdir -p .ocuspot/branch-src .ocuspot/ci
+      mkdir -p .ocuspot/ci
       cp "docker-compose.yml" .ocuspot/ci/docker-compose.yml
+      rewrite_compose_service_image() {
+        svc="$1"
+        img="$2"
+        awk -v svc="$svc" -v img="$img" '
+          function indentation(line) {
+            match(line, /[^[:space:]]/)
+            return RSTART ? RSTART - 1 : length(line)
+          }
+          function service_name(line, name) {
+            name = line
+            sub(/^[[:space:]]*/, "", name)
+            sub(/:.*/, "", name)
+            return name
+          }
+          function print_image_once() {
+            if (!printed_image) {
+              print svc_indent "  image: " img
+              printed_image = 1
+            }
+          }
+          {
+            line = $0
+            if (in_target && skip_build) {
+              if (line ~ /^[[:space:]]*$/) next
+              if (indentation(line) > build_indent) next
+              skip_build = 0
+            }
+            if (line ~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
+              if (in_target) print_image_once()
+              current = service_name(line)
+              in_target = (current == svc)
+              printed_image = 0
+              svc_indent = substr(line, 1, indentation(line))
+              print line
+              next
+            }
+            if (in_target && line ~ /^[[:space:]]*image:[[:space:]]*/) {
+              print_image_once()
+              next
+            }
+            if (in_target && line ~ /^[[:space:]]*build:[[:space:]]*/) {
+              build_indent = indentation(line)
+              skip_build = 1
+              next
+            }
+            print line
+          }
+          END { if (in_target) print_image_once() }
+        ' .ocuspot/ci/docker-compose.yml > .ocuspot/ci/docker-compose.yml.tmp
+        mv .ocuspot/ci/docker-compose.yml.tmp .ocuspot/ci/docker-compose.yml
+      }
+      mkdir -p .ocuspot/branch-src
       for service in 'backend' 'telegram-bot' 'telegram-webapp'; do
-        git fetch origin "${service}"
+        git fetch origin "${service}:refs/remotes/origin/${service}"
         rm -rf ".ocuspot/branch-src/${service}"
         mkdir -p ".ocuspot/branch-src/${service}"
         git archive "origin/${service}" | tar -x -C ".ocuspot/branch-src/${service}"
         docker build -t "${CI_REGISTRY_IMAGE}/${service}:${CI_COMMIT_SHA}" ".ocuspot/branch-src/${service}"
         docker push "${CI_REGISTRY_IMAGE}/${service}:${CI_COMMIT_SHA}"
         image="${CI_REGISTRY_IMAGE}/${service}:${CI_COMMIT_SHA}"
-        awk -v svc="$service" -v img="$image" '
-          /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/ { current=$0; sub(/^[[:space:]]*/, "", current); sub(/:.*/, "", current) }
-          current == svc && /^[[:space:]]*image:[[:space:]]*/ { sub(/image:.*/, "image: " img) }
-          { print }
-        ' .ocuspot/ci/docker-compose.yml > .ocuspot/ci/docker-compose.yml.tmp
-        mv .ocuspot/ci/docker-compose.yml.tmp .ocuspot/ci/docker-compose.yml
+        rewrite_compose_service_image "$service" "$image"
       done
 
 sync-github:
