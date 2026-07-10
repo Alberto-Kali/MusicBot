@@ -174,9 +174,7 @@ build-compose-images:
       exists:
         - docker-compose.yml
   before_script:
-    - apk add --no-cache curl git
-    - curl -fsSL "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    - chmod +x /usr/local/bin/docker-compose
+    - apk add --no-cache git
   artifacts:
     expire_in: 1 day
     paths:
@@ -258,7 +256,7 @@ build-compose-images:
         docker push "$image"
         rewrite_compose_service_image "$service" "$image"
       done
-      docker-compose -f .ocuspot/ci/docker-compose.yml config -q
+      docker run --rm -v "${CI_PROJECT_DIR:-$PWD}/.ocuspot/ci:/work" -w /work docker/compose:1.29.2 -f docker-compose.yml config -q
 
 sync-github:
   stage: sync
