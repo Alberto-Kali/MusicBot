@@ -189,15 +189,13 @@ build-service-ghcr:
 
 build-compose-images:
   stage: build
-  image: docker:stable
-  services:
-    - docker:dind
+  image: docker/compose:1.29.2
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       exists:
         - docker-compose.yml
   before_script:
-    - apk add --no-cache git docker-cli-compose
+    - apk add --no-cache git
   artifacts:
     expire_in: 1 day
     paths:
@@ -279,7 +277,7 @@ build-compose-images:
         if [ "$found" != "1" ]; then echo "GHCR image not available: $image"; exit 1; fi
         rewrite_compose_service_image "$service" "$image"
       done
-      docker compose -f .ocuspot/ci/docker-compose.yml config -q
+      docker-compose -f .ocuspot/ci/docker-compose.yml config -q
 
 sync-github:
   stage: sync
