@@ -80,6 +80,69 @@ validate-compose:
           echo "Created temporary compose env_file placeholder: ${env_file}"
         fi
       done
+      mkdir -p .ocuspot/ci
+      cp "$COMPOSE_FILE" .ocuspot/ci/docker-compose.yml
+      rewrite_compose_service_image() {
+        svc="$1"
+        img="$2"
+        awk -v svc="$svc" -v img="$img" '
+          function indentation(line) {
+            match(line, /[^[:space:]]/)
+            return RSTART ? RSTART - 1 : length(line)
+          }
+          function service_name(line, name) {
+            name = line
+            sub(/^[[:space:]]*/, "", name)
+            sub(/:.*/, "", name)
+            return name
+          }
+          function print_image_once() {
+            if (!printed_image) {
+              print svc_indent "  image: " img
+              printed_image = 1
+            }
+          }
+          {
+            line = $0
+            if (in_target && skip_build) {
+              if (line ~ /^[[:space:]]*$/) next
+              if (indentation(line) > build_indent) next
+              skip_build = 0
+            }
+            if (in_target && line !~ /^[[:space:]]*$/ && indentation(line) <= svc_level && line !~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
+              print_image_once()
+              in_target = 0
+            }
+            if (line ~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
+              if (in_target) print_image_once()
+              current = service_name(line)
+              in_target = (current == svc)
+              printed_image = 0
+              svc_level = indentation(line)
+              svc_indent = substr(line, 1, indentation(line))
+              print line
+              next
+            }
+            if (in_target && line ~ /^[[:space:]]*image:[[:space:]]*/) {
+              print_image_once()
+              next
+            }
+            if (in_target && line ~ /^[[:space:]]*build:[[:space:]]*/) {
+              build_indent = indentation(line)
+              skip_build = 1
+              next
+            }
+            print line
+          }
+          END { if (in_target) print_image_once() }
+        ' .ocuspot/ci/docker-compose.yml > .ocuspot/ci/docker-compose.yml.tmp
+        mv .ocuspot/ci/docker-compose.yml.tmp .ocuspot/ci/docker-compose.yml
+      }
+      for service in 'backend' 'telegram-bot' 'telegram-webapp'; do
+        rewrite_compose_service_image "$service" "alpine:3.20"
+      done
+      find "$COMPOSE_DIR" -maxdepth 1 -type f -name '.env*' -exec cp {} .ocuspot/ci/ \;
+      COMPOSE_FILE=.ocuspot/ci/docker-compose.yml
       docker-compose -f "$COMPOSE_FILE" config -q
 
 build-image:
@@ -171,11 +234,16 @@ build-compose-images:
               if (indentation(line) > build_indent) next
               skip_build = 0
             }
+            if (in_target && line !~ /^[[:space:]]*$/ && indentation(line) <= svc_level && line !~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
+              print_image_once()
+              in_target = 0
+            }
             if (line ~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
               if (in_target) print_image_once()
               current = service_name(line)
               in_target = (current == svc)
               printed_image = 0
+              svc_level = indentation(line)
               svc_indent = substr(line, 1, indentation(line))
               print line
               next
