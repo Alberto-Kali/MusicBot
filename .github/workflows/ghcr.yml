@@ -15,35 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Bootstrap example env files
-        shell: bash
-        run: |
-          set -euo pipefail
-          for example in .env.example .env.*.example; do
-            [ -f "$example" ] || continue
-            target="${example%.example}"
-            [ -f "$target" ] || cp "$example" "$target"
-          done
-          COMPOSE_FILE="docker-compose.yml"
-          awk '
-            function emit(line) {
-              sub(/[[:space:]]*#.*/, "", line)
-              gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", line)
-              if (line != "") print line
-            }
-            /^[[:space:]]*env_file:[[:space:]]*$/ { in_env = 1; base = match($0, /[^[:space:]]/) - 1; next }
-            in_env {
-              if ($0 ~ /^[[:space:]]*-/) { line = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", line); emit(line); next }
-              if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
-              indent = match($0, /[^[:space:]]/) - 1
-              if (indent <= base) in_env = 0
-            }
-            /^[[:space:]]*env_file:[[:space:]]*[^#[:space:]]/ { line = $0; sub(/^[[:space:]]*env_file:[[:space:]]*/, "", line); emit(line) }
-          ' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
-            case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
-            [ -f "$env_file" ] && continue
-            if [ -f "${env_file}.example" ]; then cp "${env_file}.example" "$env_file"; else mkdir -p "$(dirname "$env_file")"; touch "$env_file"; fi
-          done
+        with:
+          fetch-depth: 0
       - name: Log in to GHCR
         if: github.event_name == 'push'
         uses: docker/login-action@v3
@@ -51,17 +24,26 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compose build, publish, or verify images
+      - name: Build service branch GHCR images
         shell: bash
         run: |
           set -euo pipefail
-          COMPOSE_FILE="docker-compose.yml"
-          docker compose -f "$COMPOSE_FILE" config >/dev/null
-          if grep -Eq '^[[:space:]]+build:' "$COMPOSE_FILE"; then
-            docker compose -f "$COMPOSE_FILE" build
-            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then docker compose -f "$COMPOSE_FILE" push; fi
-          else
-            while IFS= read -r image; do
-              case "$image" in ghcr.io/*) docker buildx imagetools inspect "$image" >/dev/null ;; esac
-            done < <(docker compose -f "$COMPOSE_FILE" config --images)
-          fi
+          GHCR_OWNER="alberto-kali"
+          GHCR_REPO="musicbot"
+          mkdir -p .ocuspot/github-branch-src
+          for service in 'backend' 'telegram-bot' 'telegram-webapp'; do
+            git fetch origin "${service}:refs/remotes/origin/${service}"
+            service_sha="$(git rev-parse "origin/${service}")"
+            src=".ocuspot/github-branch-src/${service}"
+            rm -rf "$src"
+            mkdir -p "$src"
+            git archive "origin/${service}" | tar -x -C "$src"
+            test -f "$src/Dockerfile"
+            image="ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-${service}"
+            docker build --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" -t "${image}:sha-${service_sha}" -f "$src/Dockerfile" "$src"
+            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              docker push "${image}:sha-${service_sha}"
+              docker tag "${image}:sha-${service_sha}" "${image}:${service}"
+              docker push "${image}:${service}"
+            fi
+          done
