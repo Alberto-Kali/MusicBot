@@ -2,6 +2,8 @@ name: Gitleaks
 
 on:
   push:
+    branches-ignore:
+      - "ocuspot/mirror/**"
   pull_request:
 
 permissions:

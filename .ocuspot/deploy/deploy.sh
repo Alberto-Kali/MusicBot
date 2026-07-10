@@ -449,15 +449,43 @@ if [ "${DEPLOY_RUNTIME:-}" = "docker-compose" ]; then
  # shellcheck disable=SC2086
  tar -C "${SOURCE_DIR}" ${TAR_EXCLUDES} -czf "${COMPOSE_ARCHIVE}" .
  car_scp -P "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${COMPOSE_ARCHIVE}" "${CAR_USER}@${CAR_HOST}:/tmp/ocuspot-compose.music_bot_backend_kvm_pconf_bus_3123.tar.gz"
+ COMPOSE_ENV_LIST=$(mktemp /tmp/ocuspot-compose-env-list.XXXXXX)
+ for env_candidate in .env .env.*; do
+  [ -f "${SOURCE_DIR}/${env_candidate}" ] || continue
+  case "${env_candidate}" in *.example) continue ;; esac
+  printf '%s\n' "${env_candidate}" >> "${COMPOSE_ENV_LIST}"
+ done
+ if [ -s "${COMPOSE_ENV_LIST}" ]; then
+  COMPOSE_ENV_ARCHIVE=$(mktemp /tmp/ocuspot-compose-env.music_bot_backend_kvm_pconf_bus_3123.XXXXXX)
+  tar -C "${SOURCE_DIR}" -czf "${COMPOSE_ENV_ARCHIVE}" -T "${COMPOSE_ENV_LIST}"
+  chmod 0600 "${COMPOSE_ENV_ARCHIVE}" 2>/dev/null || true
+  echo "Uploading compose env files separately to carrier ..."
+  car_scp -P "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${COMPOSE_ENV_ARCHIVE}" "${CAR_USER}@${CAR_HOST}:/tmp/ocuspot-compose-env.music_bot_backend_kvm_pconf_bus_3123.tar.gz"
+  rm -f "${COMPOSE_ENV_ARCHIVE}"
+ fi
+ rm -f "${COMPOSE_ENV_LIST}"
  car_ssh -p "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${CAR_USER}@${CAR_HOST}" 'set -eu
 if ! command -v tar >/dev/null 2>&1; then
 echo "tar required on carrier for compose rollout"
 exit 15
 fi
 WORKDIR='\''/opt/ocuspot/apps/music_bot_backend_kvm_pconf_bus_3123'\''
+ENV_BACKUP="$(mktemp -d /tmp/ocuspot-compose-env-backup.XXXXXX)"
+if [ -d "$WORKDIR" ]; then
+  find "$WORKDIR" -maxdepth 1 -type f \( -name '\''.env'\'' -o -name '\''.env.*'\'' \) -exec cp -p {} "$ENV_BACKUP"/ \; 2>/dev/null || true
+fi
 rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
 tar -xzf '\''/tmp/ocuspot-compose.music_bot_backend_kvm_pconf_bus_3123.tar.gz'\'' -C "$WORKDIR"
+if [ -d "$ENV_BACKUP" ]; then
+  cp -pn "$ENV_BACKUP"/.env "$WORKDIR"/ 2>/dev/null || true
+  cp -pn "$ENV_BACKUP"/.env.* "$WORKDIR"/ 2>/dev/null || true
+  rm -rf "$ENV_BACKUP"
+fi
+if [ -f '\''/tmp/ocuspot-compose-env.music_bot_backend_kvm_pconf_bus_3123.tar.gz'\'' ]; then
+  tar -xzf '\''/tmp/ocuspot-compose-env.music_bot_backend_kvm_pconf_bus_3123.tar.gz'\'' -C "$WORKDIR"
+  chmod 0600 "$WORKDIR"/.env "$WORKDIR"/.env.* 2>/dev/null || true
+fi
 cd "$WORKDIR"
 COMPOSE_FILE='\''docker-compose.yml'\''
 COMPOSE_DIR="$(dirname "$COMPOSE_FILE")"

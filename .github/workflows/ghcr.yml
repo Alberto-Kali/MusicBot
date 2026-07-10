@@ -15,5 +15,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: No declared Docker images
-        run: echo "No root Dockerfile or compose service Dockerfiles declared by Ocuspot."
+      - name: Bootstrap example env files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in .env .env.secrets.*; do
+            [ -f "${f}.example" ] && [ ! -f "$f" ] && cp "${f}.example" "$f" || true
+          done
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compose build, publish, or verify images
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMPOSE_FILE="docker-compose.yml"
+          docker compose -f "$COMPOSE_FILE" config >/dev/null
+          if grep -Eq '^[[:space:]]+build:' "$COMPOSE_FILE"; then
+            docker compose -f "$COMPOSE_FILE" build
+            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then docker compose -f "$COMPOSE_FILE" push; fi
+          else
+            while IFS= read -r image; do
+              case "$image" in ghcr.io/*) docker buildx imagetools inspect "$image" >/dev/null ;; esac
+            done < <(docker compose -f "$COMPOSE_FILE" config --images)
+          fi
