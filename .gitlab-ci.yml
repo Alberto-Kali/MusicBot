@@ -149,25 +149,40 @@ sync-github:
       }
       git remote remove github 2>/dev/null || true
       git remote add github "https://oauth2:${OCUSPOT_GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git"
-      git push github HEAD:refs/heads/${MIRROR_BRANCH}
+      SOURCE_COMMIT="$(git rev-parse HEAD)"
+      if ! gh_api GET "${GITHUB_API}/git/ref/heads/${DEFAULT_BRANCH}" "" /tmp/ocuspot-gh-main.json; then
+       echo "GitHub mirror ${DEFAULT_BRANCH} missing or unavailable; trying one-time bootstrap push to create PR base branch."
+       git push github HEAD:refs/heads/${DEFAULT_BRANCH}
+       echo "GitHub mirror ${DEFAULT_BRANCH} bootstrapped. Next GitLab push will use PR/check/merge flow."
+       exit 0
+      fi
+      git fetch github "${DEFAULT_BRANCH}"
+      git checkout -B "${MIRROR_BRANCH}" "github/${DEFAULT_BRANCH}"
+      git rm -r --ignore-unmatch . >/dev/null 2>&1 || true
+      git checkout "${SOURCE_COMMIT}" -- .
+      if git diff --cached --quiet; then
+       echo "GitHub mirror ${DEFAULT_BRANCH} already matches GitLab ${CI_COMMIT_SHA}; nothing to sync."
+       exit 0
+      fi
+      git commit -m "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub" -m "Automated Ocuspot update from GitLab primary ${CI_PROJECT_PATH}@${CI_COMMIT_SHA}." -m "Ocuspot-Mirror: gitlab-to-github"
+      REMOTE_MIRROR_SHA="$(git ls-remote github "refs/heads/${MIRROR_BRANCH}" | awk '{print $1}')"
+      if [ -n "$REMOTE_MIRROR_SHA" ]; then
+       git push github "${MIRROR_BRANCH}:refs/heads/${MIRROR_BRANCH}" --force-with-lease="refs/heads/${MIRROR_BRANCH}:${REMOTE_MIRROR_SHA}"
+      else
+       git push github "${MIRROR_BRANCH}:refs/heads/${MIRROR_BRANCH}"
+      fi
       GITHUB_HEAD_SHA="$(git ls-remote github "refs/heads/${MIRROR_BRANCH}" | awk '{print $1}')"
       if [ -z "$GITHUB_HEAD_SHA" ]; then
-        echo "GitHub mirror branch ${MIRROR_BRANCH} was not created"
-        exit 1
-      fi
-      if ! gh_api GET "${GITHUB_API}/git/ref/heads/${DEFAULT_BRANCH}" "" /tmp/ocuspot-gh-main.json; then
-        echo "GitHub mirror ${DEFAULT_BRANCH} missing or unavailable; trying one-time bootstrap push to create PR base branch."
-        git push github HEAD:refs/heads/${DEFAULT_BRANCH}
-        echo "GitHub mirror ${DEFAULT_BRANCH} bootstrapped. Next GitLab push will use PR/check/merge flow."
-        exit 0
+       echo "GitHub mirror branch ${MIRROR_BRANCH} was not created"
+       exit 1
       fi
       OLD_BRANCHES="$(git ls-remote --heads github 'refs/heads/ocuspot/mirror/*' | awk '{print $2}' | sed 's#^refs/heads/##' || true)"
       if [ -n "$OLD_BRANCHES" ]; then
-        echo "$OLD_BRANCHES" | while IFS= read -r old_branch; do
-          [ -n "$old_branch" ] || continue
-          echo "Deleting obsolete GitHub mirror branch ${old_branch}"
-          git push github ":refs/heads/${old_branch}" || true
-        done
+       echo "$OLD_BRANCHES" | while IFS= read -r old_branch; do
+       [ -n "$old_branch" ] || continue
+       echo "Deleting obsolete GitHub mirror branch ${old_branch}"
+       git push github ":refs/heads/${old_branch}" || true
+       done
       fi
       gh_api GET "${GITHUB_API}/pulls?head=${MIRROR_HEAD}&base=${DEFAULT_BRANCH}&state=open" "" /tmp/ocuspot-prs.json
       PR_NUMBER="$(jq -r '.[0].number // empty' /tmp/ocuspot-prs.json)"
