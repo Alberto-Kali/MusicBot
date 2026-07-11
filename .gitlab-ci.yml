@@ -565,6 +565,7 @@ deploy-carrier:
   script:
     - if [ -f .ocuspot/ci/docker-compose.yml ]; then cp .ocuspot/ci/docker-compose.yml "docker-compose.yml"; fi
     - if [ -d .ocuspot/ci ]; then find .ocuspot/ci -maxdepth 1 -type f -name '.env*' -exec cp {} . \; ; fi
+    - cp .ocuspot/ci/.env .ocuspot/ci/.env.* . 2>/dev/null || true
     - cd .ocuspot/deploy
     - sed "s|__OCUSPOT_IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deploy.sh > deploy.runtime.sh
     - chmod 700 deploy.runtime.sh
