@@ -344,15 +344,81 @@ sync-github:
       ensure_branch_protection() {
       branch="$1"
       [ -n "$branch" ] || return 0
-      if [ "$branch" = "${DEFAULT_BRANCH}" ]; then
       payload="$(jq -n '{required_status_checks:null, enforce_admins:true, required_pull_request_reviews:{required_approving_review_count:0}, restrictions:null, allow_force_pushes:false, allow_deletions:false}')"
-      else
-      payload="$(jq -n '{required_status_checks:null, enforce_admins:true, required_pull_request_reviews:{required_approving_review_count:0}, restrictions:null, allow_force_pushes:true, allow_deletions:false}')"
-      fi
       gh_api PUT "${GITHUB_API}/branches/${branch}/protection" "$payload" "/tmp/ocuspot-protect-${branch//\//_}.json" || true
       }
       git remote remove github 2>/dev/null || true
       git remote add github "https://oauth2:${OCUSPOT_GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git"
+      sync_protected_branch_from_ref() {
+      source_ref="$1"
+      target_branch="$2"
+      title_scope="$3"
+      [ -n "$source_ref" ] && [ -n "$target_branch" ] || return 0
+      if ! gh_api GET "${GITHUB_API}/git/ref/heads/${target_branch}" "" "/tmp/ocuspot-gh-${target_branch//\//_}.json"; then
+      echo "GitHub mirror ${target_branch} missing; bootstrapping branch before enabling protection."
+      git push github "${source_ref}:refs/heads/${target_branch}"
+      ensure_branch_protection "${target_branch}"
+      return 0
+      fi
+      ensure_branch_protection "${target_branch}"
+      branch_slug="$(printf '%s' "$target_branch" | tr '/[:upper:]' '-[:lower:]')"
+      mirror_branch="ocuspot/mirror/${branch_slug}"
+      mirror_head="${GITHUB_OWNER}:${mirror_branch}"
+      git fetch github "${target_branch}"
+      git checkout -B "${mirror_branch}" "github/${target_branch}"
+      git rm -r --ignore-unmatch . >/dev/null 2>&1 || true
+      git checkout "${source_ref}" -- .
+      if git diff --cached --quiet; then
+      echo "GitHub mirror ${target_branch} already matches ${source_ref}; nothing sync."
+      return 0
+      fi
+      git commit -m "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub ${target_branch}" -m "Automated Ocuspot update for ${title_scope} from GitLab primary ${CI_PROJECT_PATH}@${CI_COMMIT_SHA}." -m "Ocuspot-Mirror: gitlab-to-github"
+      remote_mirror_sha="$(git ls-remote github "refs/heads/${mirror_branch}" | awk '{print $1}')"
+      if [ -n "$remote_mirror_sha" ]; then
+      git push github "${mirror_branch}:refs/heads/${mirror_branch}" --force-with-lease="refs/heads/${mirror_branch}:${remote_mirror_sha}"
+      else
+      git push github "${mirror_branch}:refs/heads/${mirror_branch}"
+      fi
+      github_head_sha="$(git ls-remote github "refs/heads/${mirror_branch}" | awk '{print $1}')"
+      if [ -z "$github_head_sha" ]; then
+      echo "GitHub mirror branch ${mirror_branch} was not created"
+      exit 1
+      fi
+      gh_api GET "${GITHUB_API}/pulls?head=${mirror_head}&base=${target_branch}&state=open" "" "/tmp/ocuspot-prs-${branch_slug}.json"
+      pr_number="$(jq -r '.[0].number // empty' "/tmp/ocuspot-prs-${branch_slug}.json")"
+      pr_body="Automated Ocuspot update for ${title_scope} from GitLab primary ${CI_PROJECT_PATH}@${CI_COMMIT_SHA}. GitLab pipeline already passed; GitHub checks still build packages/images before merge."
+      if [ -z "$pr_number" ]; then
+      pr_create="$(jq -n --arg title "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub ${target_branch}" --arg head "$mirror_head" --arg base "$target_branch" --arg body "$pr_body" '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true}')"
+      gh_api POST "${GITHUB_API}/pulls" "$pr_create" "/tmp/ocuspot-pr-create-${branch_slug}.json"
+      pr_number="$(jq -r '.number' "/tmp/ocuspot-pr-create-${branch_slug}.json")"
+      else
+      pr_update="$(jq -n --arg title "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub ${target_branch}" --arg body "$pr_body" '{title:$title, body:$body}')"
+      gh_api PATCH "${GITHUB_API}/pulls/${pr_number}" "$pr_update" "/tmp/ocuspot-pr-update-${branch_slug}.json"
+      fi
+      echo "GitHub mirror PR #${pr_number} opened/updated from ${mirror_branch} to ${target_branch} at ${github_head_sha}. Waiting GitHub checks ..."
+      for i in $(seq 1 80); do
+      gh_api GET "${GITHUB_API}/commits/${github_head_sha}/check-runs" "" "/tmp/ocuspot-checks-${branch_slug}.json" || printf '{"total_count":0,"check_runs":[]}' > "/tmp/ocuspot-checks-${branch_slug}.json"
+      total="$(jq -r '.total_count // 0' "/tmp/ocuspot-checks-${branch_slug}.json")"
+      incomplete="$(jq -r '[.check_runs[]? | select(.status != "completed")] | length' "/tmp/ocuspot-checks-${branch_slug}.json")"
+      bad="$(jq -r '[.check_runs[]? | select(.status == "completed" and (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))] | length' "/tmp/ocuspot-checks-${branch_slug}.json")"
+      gh_api GET "${GITHUB_API}/commits/${github_head_sha}/status" "" "/tmp/ocuspot-status-${branch_slug}.json" || printf '{"state":"pending"}' > "/tmp/ocuspot-status-${branch_slug}.json"
+      state="$(jq -r '.state // "pending"' "/tmp/ocuspot-status-${branch_slug}.json")"
+      if [ "$bad" != "0" ] || [ "$state" = "failure" ] || [ "$state" = "error" ]; then echo "GitHub checks failed ${github_head_sha}"; exit 1; fi
+      if [ "$total" != "0" ] && [ "$incomplete" = "0" ] && { [ "$state" = "success" ] || [ "$state" = "pending" ]; }; then break; fi
+      if [ "$i" = "80" ]; then echo "Timed out waiting GitHub checks on ${github_head_sha}"; exit 1; fi
+      sleep 15
+      done
+      review_payload="$(jq -n '{event:"APPROVE", body:"Ocuspot auto-approval: GitLab primary pipeline passed and GitHub checks completed mirror update."}')"
+      gh_api POST "${GITHUB_API}/pulls/${pr_number}/reviews" "$review_payload" "/tmp/ocuspot-pr-review-${branch_slug}.json" || true
+      merge_payload="$(jq -n --arg sha "${github_head_sha}" --arg trailer "Ocuspot-Mirror: gitlab-to-github" --arg target "${target_branch}" '{commit_title:("sync(gitlab): mirror accepted GitLab primary for " + $target), commit_message:("Merged by Ocuspot after GitHub checks passed. GitLab pipeline was source truth automated update.\n\n" + $trailer), sha:$sha, merge_method:"squash"}')"
+      merged=0
+      for i in $(seq 1 20); do
+      if gh_api PUT "${GITHUB_API}/pulls/${pr_number}/merge" "$merge_payload" "/tmp/ocuspot-pr-merge-${branch_slug}.json"; then merged=1; break; fi
+      sleep 10
+      done
+      if [ "$merged" != "1" ]; then echo "GitHub PR #${pr_number} was not mergeable after checks. Review branch rules required approvals."; exit 1; fi
+      git push github ":refs/heads/${mirror_branch}" || true
+      }
       ensure_github_actions_write
       cat > /tmp/ocuspot-service-branches <<'OCUSPOT_SERVICE_BRANCHES'
       backend
@@ -362,8 +428,7 @@ sync-github:
       while IFS= read -r service_branch; do
        [ -n "$service_branch" ] || continue
       git fetch origin "${service_branch}:refs/remotes/origin/${service_branch}"
-      git push github "refs/remotes/origin/${service_branch}:refs/heads/${service_branch}" --force
-      ensure_branch_protection "$service_branch"
+      sync_protected_branch_from_ref "refs/remotes/origin/${service_branch}" "$service_branch" "service branch ${service_branch}"
       done < /tmp/ocuspot-service-branches
       SOURCE_COMMIT="$(git rev-parse HEAD)"
       if ! gh_api GET "${GITHUB_API}/git/ref/heads/${DEFAULT_BRANCH}" "" /tmp/ocuspot-gh-main.json; then
