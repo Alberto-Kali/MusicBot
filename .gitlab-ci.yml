@@ -314,8 +314,9 @@ sync-github:
       git config user.email "${GITLAB_USER_EMAIL:-ocuspot-ci@users.noreply.gitlab.com}"
       git config user.name "${GITLAB_USER_NAME:-Ocuspot CI}"
       if ! git log -1 --pretty=%B | grep -F "Ocuspot-Mirror: gitlab-to-github" >/dev/null 2>&1; then
-        git commit --amend --no-edit --trailer "Ocuspot-Mirror: gitlab-to-github" || true
+      git commit --amend --no-edit --trailer "Ocuspot-Mirror: gitlab-to-github" || true
       fi
+      SOURCE_COMMIT="$(git rev-parse HEAD)"
       GITHUB_OWNER="Alberto-Kali"
       GITHUB_REPO="MusicBot"
       GITHUB_API="https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}"
@@ -438,7 +439,6 @@ sync-github:
       git fetch origin "${service_branch}:refs/remotes/origin/${service_branch}"
       sync_protected_branch_from_ref "refs/remotes/origin/${service_branch}" "$service_branch" "service branch ${service_branch}"
       done < /tmp/ocuspot-service-branches
-      SOURCE_COMMIT="$(git rev-parse HEAD)"
       if ! gh_api GET "${GITHUB_API}/git/ref/heads/${DEFAULT_BRANCH}" "" /tmp/ocuspot-gh-main.json; then
        echo "GitHub mirror ${DEFAULT_BRANCH} missing or unavailable; trying one-time bootstrap push to create PR base branch."
       git push github HEAD:refs/heads/${DEFAULT_BRANCH}
