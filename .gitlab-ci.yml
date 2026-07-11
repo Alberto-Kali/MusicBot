@@ -323,10 +323,10 @@ sync-github:
       MIRROR_HEAD="${GITHUB_OWNER}:${MIRROR_BRANCH}"
       DEFAULT_BRANCH="main"
       gh_api() {
-        method="$1"
-        url="$2"
-        data="${3:-}"
-        out="$4"
+      method="$1"
+      url="$2"
+      data="${3:-}"
+      out="$4"
         if [ -n "$data" ]; then
           code="$(curl -sS -o "$out" -w "%{http_code}" -X "$method" -H "Authorization: Bearer ${OCUSPOT_GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" "$url" -d "$data")"
         else
@@ -334,11 +334,26 @@ sync-github:
         fi
         case "$code" in
           2*) return 0 ;;
-          *) echo "GitHub API ${method} ${url} failed with HTTP ${code}"; cat "$out"; return 1 ;;
-        esac
+      *) echo "GitHub API ${method} ${url} failed with HTTP ${code}"; cat "$out"; return 1 ;;
+      esac
+      }
+      ensure_github_actions_write() {
+      payload="$(jq -n '{default_workflow_permissions:"write", can_approve_pull_request_reviews:true}')"
+      gh_api PUT "${GITHUB_API}/actions/permissions/workflow" "$payload" /tmp/ocuspot-actions-permissions.json || true
+      }
+      ensure_branch_protection() {
+      branch="$1"
+      [ -n "$branch" ] || return 0
+      if [ "$branch" = "${DEFAULT_BRANCH}" ]; then
+      payload="$(jq -n '{required_status_checks:null, enforce_admins:true, required_pull_request_reviews:{required_approving_review_count:0}, restrictions:null, allow_force_pushes:false, allow_deletions:false}')"
+      else
+      payload="$(jq -n '{required_status_checks:null, enforce_admins:true, required_pull_request_reviews:{required_approving_review_count:0}, restrictions:null, allow_force_pushes:true, allow_deletions:false}')"
+      fi
+      gh_api PUT "${GITHUB_API}/branches/${branch}/protection" "$payload" "/tmp/ocuspot-protect-${branch//\//_}.json" || true
       }
       git remote remove github 2>/dev/null || true
       git remote add github "https://oauth2:${OCUSPOT_GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git"
+      ensure_github_actions_write
       cat > /tmp/ocuspot-service-branches <<'OCUSPOT_SERVICE_BRANCHES'
       backend
       telegram-bot
@@ -346,16 +361,19 @@ sync-github:
       OCUSPOT_SERVICE_BRANCHES
       while IFS= read -r service_branch; do
        [ -n "$service_branch" ] || continue
-       git fetch origin "${service_branch}:refs/remotes/origin/${service_branch}"
-       git push github "refs/remotes/origin/${service_branch}:refs/heads/${service_branch}" --force
+      git fetch origin "${service_branch}:refs/remotes/origin/${service_branch}"
+      git push github "refs/remotes/origin/${service_branch}:refs/heads/${service_branch}" --force
+      ensure_branch_protection "$service_branch"
       done < /tmp/ocuspot-service-branches
       SOURCE_COMMIT="$(git rev-parse HEAD)"
       if ! gh_api GET "${GITHUB_API}/git/ref/heads/${DEFAULT_BRANCH}" "" /tmp/ocuspot-gh-main.json; then
        echo "GitHub mirror ${DEFAULT_BRANCH} missing or unavailable; trying one-time bootstrap push to create PR base branch."
-       git push github HEAD:refs/heads/${DEFAULT_BRANCH}
-       echo "GitHub mirror ${DEFAULT_BRANCH} bootstrapped. Next GitLab push will use PR/check/merge flow."
+      git push github HEAD:refs/heads/${DEFAULT_BRANCH}
+      ensure_branch_protection "${DEFAULT_BRANCH}"
+      echo "GitHub mirror ${DEFAULT_BRANCH} bootstrapped. Next GitLab push will use PR/check/merge flow."
        exit 0
       fi
+      ensure_branch_protection "${DEFAULT_BRANCH}"
       git fetch github "${DEFAULT_BRANCH}"
       git checkout -B "${MIRROR_BRANCH}" "github/${DEFAULT_BRANCH}"
       git rm -r --ignore-unmatch . >/dev/null 2>&1 || true

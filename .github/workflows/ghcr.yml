@@ -23,7 +23,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.OCUSPOT_GITHUB_TOKEN || github.token }}
       - name: Build service branch GHCR images
         shell: bash
         run: |
