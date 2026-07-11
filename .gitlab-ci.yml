@@ -68,11 +68,28 @@ validate-compose:
           emit(line)
         }
       ' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
-        case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
-        target="${COMPOSE_DIR}/${env_file}"
-        if [ ! -f "$target" ]; then
-          if [ -f "${target}.example" ]; then
-            cp "${target}.example" "$target"
+case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
+target="${COMPOSE_DIR}/${env_file}"
+env_key="$(printf '%s' "$env_file" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Z0-9_]/_/g')"
+raw_var="OCUSPOT_ENV_FILE_${env_key}"
+b64_var="${raw_var}_B64"
+raw_value="$(eval "printf '%s' \"\${${raw_var}:-}\"")"
+b64_value="$(eval "printf '%s' \"\${${b64_var}:-}\"")"
+if [ -n "$b64_value" ]; then
+mkdir -p "$(dirname "$target")"
+printf '%s' "$b64_value" | base64 -d > "$target"
+echo "Created compose env_file from CI variable: ${env_file} (${b64_var})"
+continue
+fi
+if [ -n "$raw_value" ]; then
+mkdir -p "$(dirname "$target")"
+printf '%s\n' "$raw_value" > "$target"
+echo "Created compose env_file from CI variable: ${env_file} (${raw_var})"
+continue
+fi
+if [ ! -f "$target" ]; then
+if [ -f "${target}.example" ]; then
+cp "${target}.example" "$target"
           else
             mkdir -p "$(dirname "$target")"
             touch "$target"
@@ -287,11 +304,28 @@ build-compose-images:
           emit(line)
         }
       ' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
-        case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
-        target="${COMPOSE_DIR}/${env_file}"
-        if [ ! -f "$target" ]; then
-          if [ -f "${target}.example" ]; then
-            cp "${target}.example" "$target"
+case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
+target="${COMPOSE_DIR}/${env_file}"
+env_key="$(printf '%s' "$env_file" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Z0-9_]/_/g')"
+raw_var="OCUSPOT_ENV_FILE_${env_key}"
+b64_var="${raw_var}_B64"
+raw_value="$(eval "printf '%s' \"\${${raw_var}:-}\"")"
+b64_value="$(eval "printf '%s' \"\${${b64_var}:-}\"")"
+if [ -n "$b64_value" ]; then
+mkdir -p "$(dirname "$target")"
+printf '%s' "$b64_value" | base64 -d > "$target"
+echo "Created compose env_file from CI variable: ${env_file} (${b64_var})"
+continue
+fi
+if [ -n "$raw_value" ]; then
+mkdir -p "$(dirname "$target")"
+printf '%s\n' "$raw_value" > "$target"
+echo "Created compose env_file from CI variable: ${env_file} (${raw_var})"
+continue
+fi
+if [ ! -f "$target" ]; then
+if [ -f "${target}.example" ]; then
+cp "${target}.example" "$target"
           else
             mkdir -p "$(dirname "$target")"
             touch "$target"
