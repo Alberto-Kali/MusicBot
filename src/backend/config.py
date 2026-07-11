@@ -10,6 +10,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", os.getenv("BOT_TOKEN", ""))
 
 YTDLP_JS_RUNTIMES = os.getenv("YTDLP_JS_RUNTIMES", "deno:./include/deno")
 YTDLP_REMOTE_COMPONENTS = os.getenv("YTDLP_REMOTE_COMPONENTS", "ejs:github")
+YOUTUBE_WEB_API_KEY = os.getenv("YOUTUBE_WEB_API_KEY", "").strip()
+YOUTUBE_WEB_REMIX_API_KEY = os.getenv("YOUTUBE_WEB_REMIX_API_KEY", "").strip()
+YOUTUBE_TV_API_KEY = os.getenv("YOUTUBE_TV_API_KEY", "").strip()
 
 BACKEND_COOKIES_FILE = os.getenv("BACKEND_COOKIES_FILE", "")
 BACKEND_BROWSER_JSON_FILE = os.getenv("BACKEND_BROWSER_JSON_FILE", "")

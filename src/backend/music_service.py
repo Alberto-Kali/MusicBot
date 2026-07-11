@@ -13,7 +13,15 @@ import requests
 import yt_dlp
 from ytmusicapi import YTMusic
 
-from backend.config import AuthFiles, BACKEND_TEMP_DIR, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
+from backend.config import (
+    AuthFiles,
+    BACKEND_TEMP_DIR,
+    YOUTUBE_TV_API_KEY,
+    YOUTUBE_WEB_API_KEY,
+    YOUTUBE_WEB_REMIX_API_KEY,
+    YTDLP_JS_RUNTIMES,
+    YTDLP_REMOTE_COMPONENTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +110,8 @@ class MusicService:
             "client_name": "WEB",
             "header_client_name": "1",
             "client_version": "2.2021111",
-            "api_key": "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX3",
+            "api_key_env": "YOUTUBE_WEB_API_KEY",
+            "api_key": YOUTUBE_WEB_API_KEY,
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36",
             "use_login": True,
         },
@@ -111,7 +120,8 @@ class MusicService:
             "client_name": "WEB_REMIX",
             "header_client_name": "67",
             "client_version": "1.20220606.03.00",
-            "api_key": "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30",
+            "api_key_env": "YOUTUBE_WEB_REMIX_API_KEY",
+            "api_key": YOUTUBE_WEB_REMIX_API_KEY,
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36",
             "use_login": True,
         },
@@ -120,7 +130,8 @@ class MusicService:
             "client_name": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
             "header_client_name": "85",
             "client_version": "2.0",
-            "api_key": "AIzaSyDCU8hByM-4DrUqRUYnGn-3llEO78bcxq8",
+            "api_key_env": "YOUTUBE_TV_API_KEY",
+            "api_key": YOUTUBE_TV_API_KEY,
             "user_agent": "Mozilla/5.0 (PlayStation 4 5.55) AppleWebKit/601.2 (KHTML, like Gecko)",
             "use_login": False,
             "third_party_embed": True,
@@ -128,6 +139,14 @@ class MusicService:
     )
 
     def __init__(self, auth_files: AuthFiles):
+        missing_api_keys = [
+            client["api_key_env"]
+            for client in self._PLAYER_CLIENTS
+            if not str(client.get("api_key", "")).strip()
+        ]
+        if missing_api_keys:
+            missing_env = ", ".join(missing_api_keys)
+            raise RuntimeError(f"Missing YouTube API key environment variables: {missing_env}")
         self._auth = auth_files
         self._ytmusic = YTMusic(auth_files.browser_json_file)
         self._ytdlp_logger = YtdlpLogProxy()
