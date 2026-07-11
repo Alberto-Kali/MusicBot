@@ -349,6 +349,14 @@ sync-github:
       }
       git remote remove github 2>/dev/null || true
       git remote add github "https://oauth2:${OCUSPOT_GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git"
+      legacy_service_mirrors="$(git ls-remote --heads github 'refs/heads/ocuspot/mirror/*' | awk '{print $2}' | sed 's#^refs/heads/##' || true)"
+      if [ -n "$legacy_service_mirrors" ]; then
+      echo "$legacy_service_mirrors" | while IFS= read -r old_branch; do
+      [ -n "$old_branch" ] || continue
+      echo "Deleting obsolete GitHub service mirror branch ${old_branch}"
+      git push github ":refs/heads/${old_branch}" || true
+      done
+      fi
       sync_protected_branch_from_ref() {
       source_ref="$1"
       target_branch="$2"
@@ -362,7 +370,7 @@ sync-github:
       fi
       ensure_branch_protection "${target_branch}"
       branch_slug="$(printf '%s' "$target_branch" | tr '/[:upper:]' '-[:lower:]')"
-      mirror_branch="ocuspot/mirror/${branch_slug}"
+      mirror_branch="ocuspot/service-mirror/${branch_slug}"
       mirror_head="${GITHUB_OWNER}:${mirror_branch}"
       git fetch github "${target_branch}"
       git checkout -B "${mirror_branch}" "github/${target_branch}"
