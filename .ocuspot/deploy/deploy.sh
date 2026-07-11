@@ -449,12 +449,12 @@ if [ "${DEPLOY_RUNTIME:-}" = "docker-compose" ]; then
  # shellcheck disable=SC2086
  tar -C "${SOURCE_DIR}" ${TAR_EXCLUDES} -czf "${COMPOSE_ARCHIVE}" .
  car_scp -P "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${COMPOSE_ARCHIVE}" "${CAR_USER}@${CAR_HOST}:/tmp/ocuspot-compose.music_bot_backend_kvm_pconf_bus_3123.tar.gz"
- COMPOSE_ENV_LIST=$(mktemp /tmp/ocuspot-compose-env-list.XXXXXX)
- for env_candidate in .env .env.*; do
-  [ -f "${SOURCE_DIR}/${env_candidate}" ] || continue
-  case "${env_candidate}" in *.example) continue ;; esac
-  printf '%s\n' "${env_candidate}" >> "${COMPOSE_ENV_LIST}"
- done
+COMPOSE_ENV_LIST=$(mktemp /tmp/ocuspot-compose-env-list.XXXXXX)
+find "${SOURCE_DIR}" -maxdepth 1 -type f -name '.env*' | while IFS= read -r env_path; do
+env_candidate="${env_path##*/}"
+case "${env_candidate}" in *.example) continue ;; esac
+printf '%s\n' "${env_candidate}" >> "${COMPOSE_ENV_LIST}"
+done
  if [ -s "${COMPOSE_ENV_LIST}" ]; then
   COMPOSE_ENV_ARCHIVE=$(mktemp /tmp/ocuspot-compose-env.music_bot_backend_kvm_pconf_bus_3123.XXXXXX)
   tar -C "${SOURCE_DIR}" -czf "${COMPOSE_ENV_ARCHIVE}" -T "${COMPOSE_ENV_LIST}"
