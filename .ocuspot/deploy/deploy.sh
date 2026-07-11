@@ -464,6 +464,18 @@ if [ "${DEPLOY_RUNTIME:-}" = "docker-compose" ]; then
   rm -f "${COMPOSE_ENV_ARCHIVE}"
  fi
  rm -f "${COMPOSE_ENV_LIST}"
+ if [ -n "${CI_REGISTRY:-}" ] && [ -n "${CI_REGISTRY_USER:-}" ] && [ -n "${CI_REGISTRY_PASSWORD:-}" ]; then
+ REGISTRY_TMP_DIR=$(mktemp -d /tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.XXXXXX)
+ printf '%s' "${CI_REGISTRY}" > "${REGISTRY_TMP_DIR}/registry"
+ printf '%s' "${CI_REGISTRY_USER}" > "${REGISTRY_TMP_DIR}/user"
+ printf '%s' "${CI_REGISTRY_PASSWORD}" > "${REGISTRY_TMP_DIR}/password"
+ chmod 0600 "${REGISTRY_TMP_DIR}"/* 2>/dev/null || true
+ echo "Uploading registry credentials for carrier pull ..."
+ car_scp -P "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${REGISTRY_TMP_DIR}/registry" "${CAR_USER}@${CAR_HOST}:/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.registry"
+ car_scp -P "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${REGISTRY_TMP_DIR}/user" "${CAR_USER}@${CAR_HOST}:/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.user"
+ car_scp -P "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${REGISTRY_TMP_DIR}/password" "${CAR_USER}@${CAR_HOST}:/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.password"
+ rm -rf "${REGISTRY_TMP_DIR}"
+ fi
  car_ssh -p "${CAR_PORT}" -o StrictHostKeyChecking=accept-new "${CAR_USER}@${CAR_HOST}" 'set -eu
 if ! command -v tar >/dev/null 2>&1; then
 echo "tar required on carrier for compose rollout"
@@ -632,13 +644,21 @@ if command -v docker >/dev/null 2>&1; then
   docker rm -f ${PORT_CONTAINERS}
  fi
 fi
+if [ -s '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.registry'\'' ] && [ -s '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.user'\'' ] && [ -s '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.password'\'' ]; then
+  if command -v docker >/dev/null 2>&1; then
+    docker login "$(cat '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.registry'\'')" -u "$(cat '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.user'\'')" --password-stdin < '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.password'\''
+  elif command -v podman >/dev/null 2>&1; then
+    podman login "$(cat '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.registry'\'')" -u "$(cat '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.user'\'')" --password-stdin < '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.password'\''
+  fi
+  rm -f '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.registry'\'' '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.user'\'' '\''/tmp/ocuspot-registry.music_bot_backend_kvm_pconf_bus_3123.password'\''
+fi
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-docker compose -f '\''docker-compose.ocuspot.sanitized.yml'\'' up -d --build --force-recreate --remove-orphans
+  docker compose -f '\''docker-compose.ocuspot.sanitized.yml'\'' up -d --build --force-recreate --remove-orphans
 elif command -v docker-compose >/dev/null 2>&1; then
 docker-compose -f '\''docker-compose.ocuspot.sanitized.yml'\'' up -d --build --force-recreate --remove-orphans
 else
-echo "Compose CLI missing on carrier"
-exit 15
+  echo "Compose CLI missing on carrier"
+  exit 15
 fi'
  DEPLOY_WORKLOAD_DONE=1
 fi
