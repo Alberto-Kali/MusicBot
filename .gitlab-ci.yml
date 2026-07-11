@@ -564,6 +564,7 @@ deploy-carrier:
       if [ -n "$OCUSPOT_SSH_PRIVATE_KEY" ]; then printf '%s\n' "$OCUSPOT_SSH_PRIVATE_KEY" > ~/.ssh/ocuspot_deploy_key && chmod 600 ~/.ssh/ocuspot_deploy_key && printf 'Host *\n IdentityFile ~/.ssh/ocuspot_deploy_key\n IdentitiesOnly yes\n StrictHostKeyChecking accept-new\n' > ~/.ssh/config; else printf 'Host *\n StrictHostKeyChecking accept-new\n' > ~/.ssh/config; fi
   script:
     - if [ -f .ocuspot/ci/docker-compose.yml ]; then cp .ocuspot/ci/docker-compose.yml "docker-compose.yml"; fi
+    - if [ -d .ocuspot/ci ]; then find .ocuspot/ci -maxdepth 1 -type f -name '.env*' -exec cp {} . \; ; fi
     - cd .ocuspot/deploy
     - sed "s|__OCUSPOT_IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deploy.sh > deploy.runtime.sh
     - chmod 700 deploy.runtime.sh
