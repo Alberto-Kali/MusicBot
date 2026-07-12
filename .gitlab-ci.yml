@@ -1,0 +1,640 @@
+stages:
+  - verify
+  - build
+  - sync
+  - deploy
+
+verify-container-contract:
+  stage: verify
+  image: alpine:latest
+  script:
+    - |
+      set -e
+      echo "Ocuspot project contract: container-first."
+      echo "Runtime: docker-compose"
+      if [ -f Dockerfile ]; then
+        echo "Dockerfile detected: built-in image build/deploy path available."
+      else
+        echo "No Dockerfile detected yet. Compose projects are supported when declared in .ocuspot/ocuspot.yaml."
+      fi
+      if [ -f docker-compose.yml ] || [ -f docker-compose.yaml ] || [ -f compose.yml ] || [ -f compose.yaml ]; then
+        echo "Compose file detected."
+      fi
+      test -f "docker-compose.yml"
+
+validate-compose:
+  stage: verify
+  image: docker/compose:1.29.2
+  rules:
+    - exists:
+        - docker-compose.yml
+        - docker-compose.yaml
+        - compose.yml
+        - compose.yaml
+  script:
+    - |
+      set -e
+      COMPOSE_FILE=""
+      for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+        if [ -f "$f" ]; then COMPOSE_FILE="$f"; break; fi
+      done
+      test -n "$COMPOSE_FILE"
+      COMPOSE_DIR="$(dirname "$COMPOSE_FILE")"
+      awk '
+        function emit(line) {
+          sub(/[[:space:]]*#.*/, "", line)
+          gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", line)
+          if (line != "") print line
+        }
+        /^[[:space:]]*env_file:[[:space:]]*$/ {
+          in_env = 1
+          base = match($0, /[^[:space:]]/) - 1
+          next
+        }
+        in_env {
+          if ($0 ~ /^[[:space:]]*-/) {
+            line = $0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+            emit(line)
+            next
+          }
+          if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+          indent = match($0, /[^[:space:]]/) - 1
+          if (indent <= base) in_env = 0
+        }
+        /^[[:space:]]*env_file:[[:space:]]*[^#[:space:]]/ {
+          line = $0
+          sub(/^[[:space:]]*env_file:[[:space:]]*/, "", line)
+          emit(line)
+        }
+      ' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
+        case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
+        target="${COMPOSE_DIR}/${env_file}"
+        env_key="$(printf '%s' "$env_file" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Z0-9_]/_/g')"
+        raw_var="OCUSPOT_ENV_FILE_${env_key}"
+        b64_var="${raw_var}_B64"
+        raw_value="$(eval "printf '%s' \"\${${raw_var}:-}\"")"
+        b64_value="$(eval "printf '%s' \"\${${b64_var}:-}\"")"
+        if [ -n "$b64_value" ]; then
+          mkdir -p "$(dirname "$target")"
+          printf '%s' "$b64_value" | base64 -d > "$target"
+          echo "Created compose env_file from CI variable: ${env_file} (${b64_var})"
+          continue
+        fi
+        if [ -n "$raw_value" ]; then
+          mkdir -p "$(dirname "$target")"
+          printf '%s\n' "$raw_value" > "$target"
+          echo "Created compose env_file from CI variable: ${env_file} (${raw_var})"
+          continue
+        fi
+      if [ ! -f "$target" ]; then
+          if [ -f "${target}.example" ]; then
+            cp "${target}.example" "$target"
+          else
+            mkdir -p "$(dirname "$target")"
+            touch "$target"
+          fi
+          echo "Created temporary compose env_file placeholder: ${env_file}"
+      fi
+      done
+      mkdir -p .ocuspot/ci
+      cp "$COMPOSE_FILE" .ocuspot/ci/docker-compose.yml
+      rewrite_compose_service_image() {
+        svc="$1"
+        img="$2"
+        awk -v svc="$svc" -v img="$img" '
+          function indentation(line) {
+            match(line, /[^[:space:]]/)
+            return RSTART ? RSTART - 1 : length(line)
+          }
+          function service_name(line, name) {
+            name = line
+            sub(/^[[:space:]]*/, "", name)
+            sub(/:.*/, "", name)
+            return name
+          }
+          function print_image_once() {
+            if (!printed_image) {
+              print svc_indent "  image: " img
+              printed_image = 1
+            }
+          }
+          {
+            line = $0
+            if (in_target && skip_build) {
+              if (line ~ /^[[:space:]]*$/) next
+              if (indentation(line) > build_indent) next
+              skip_build = 0
+            }
+            if (in_target && line !~ /^[[:space:]]*$/ && indentation(line) <= svc_level && line !~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
+              print_image_once()
+              in_target = 0
+            }
+            if (line ~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
+              if (in_target) print_image_once()
+              current = service_name(line)
+              in_target = (current == svc)
+              printed_image = 0
+              svc_level = indentation(line)
+              svc_indent = substr(line, 1, indentation(line))
+              print line
+              next
+            }
+            if (in_target && line ~ /^[[:space:]]*image:[[:space:]]*/) {
+              print_image_once()
+              next
+            }
+            if (in_target && line ~ /^[[:space:]]*build:[[:space:]]*/) {
+              build_indent = indentation(line)
+              skip_build = 1
+              next
+            }
+            print line
+          }
+          END { if (in_target) print_image_once() }
+        ' .ocuspot/ci/docker-compose.yml > .ocuspot/ci/docker-compose.yml.tmp
+        mv .ocuspot/ci/docker-compose.yml.tmp .ocuspot/ci/docker-compose.yml
+      }
+      for service in 'backend' 'telegram-bot' 'telegram-webapp'; do
+        rewrite_compose_service_image "$service" "alpine:3.20"
+      done
+      find "$COMPOSE_DIR" -maxdepth 1 -type f -name '.env*' -exec cp {} .ocuspot/ci/ \;
+      COMPOSE_FILE=.ocuspot/ci/docker-compose.yml
+      docker-compose -f "$COMPOSE_FILE" config -q
+
+build-image:
+  stage: build
+  image: docker:stable
+  services:
+    - docker:dind
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      exists:
+        - Dockerfile
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+    - docker save "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" -o ocuspot-image.tar
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - ocuspot-image.tar
+
+build-compose-images:
+  stage: build
+  image: docker:stable
+  services:
+    - docker:dind
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      exists:
+        - docker-compose.yml
+  before_script:
+    - apk add --no-cache git
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - .ocuspot/ci/docker-compose.yml
+      - .ocuspot/ci/.env*
+  script:
+    - |
+      set -e
+      mkdir -p .ocuspot/ci
+      cp "docker-compose.yml" .ocuspot/ci/docker-compose.yml
+      rewrite_compose_service_image() {
+        svc="$1"
+        img="$2"
+        awk -v svc="$svc" -v img="$img" '
+          function indentation(line) {
+            match(line, /[^[:space:]]/)
+            return RSTART ? RSTART - 1 : length(line)
+          }
+          function service_name(line, name) {
+            name = line
+            sub(/^[[:space:]]*/, "", name)
+            sub(/:.*/, "", name)
+            return name
+          }
+          function print_image_once() {
+            if (!printed_image) {
+              print svc_indent "  image: " img
+              printed_image = 1
+            }
+          }
+          {
+            line = $0
+            if (in_target && skip_build) {
+              if (line ~ /^[[:space:]]*$/) next
+              if (indentation(line) > build_indent) next
+              skip_build = 0
+            }
+            if (in_target && line !~ /^[[:space:]]*$/ && indentation(line) <= svc_level && line !~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
+              print_image_once()
+              in_target = 0
+            }
+            if (line ~ /^[[:space:]]{2}[-_A-Za-z0-9]+:[[:space:]]*$/) {
+              if (in_target) print_image_once()
+              current = service_name(line)
+              in_target = (current == svc)
+              printed_image = 0
+              svc_level = indentation(line)
+              svc_indent = substr(line, 1, indentation(line))
+              print line
+              next
+            }
+            if (in_target && line ~ /^[[:space:]]*image:[[:space:]]*/) {
+              print_image_once()
+              next
+            }
+            if (in_target && line ~ /^[[:space:]]*build:[[:space:]]*/) {
+              build_indent = indentation(line)
+              skip_build = 1
+              next
+            }
+            print line
+          }
+          END { if (in_target) print_image_once() }
+        ' .ocuspot/ci/docker-compose.yml > .ocuspot/ci/docker-compose.yml.tmp
+        mv .ocuspot/ci/docker-compose.yml.tmp .ocuspot/ci/docker-compose.yml
+      }
+      docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+      mkdir -p .ocuspot/branch-src
+      for service in 'backend' 'telegram-bot' 'telegram-webapp'; do
+        service_sha="$(git ls-remote origin "refs/heads/${service}" | awk '{print $1}')"
+        test -n "$service_sha"
+        src=".ocuspot/branch-src/${service}"
+        rm -rf "$src"
+        mkdir -p "$src"
+        git fetch origin "${service}:refs/remotes/origin/${service}"
+        git archive "origin/${service}" | tar -x -C "$src"
+        test -f "$src/Dockerfile"
+        image="${CI_REGISTRY_IMAGE}/${service}:sha-${service_sha}"
+        docker build -t "$image" "$src"
+        docker push "$image"
+        rewrite_compose_service_image "$service" "$image"
+      done
+      COMPOSE_FILE=.ocuspot/ci/docker-compose.yml
+      COMPOSE_DIR="$(dirname "$COMPOSE_FILE")"
+      awk '
+        function emit(line) {
+          sub(/[[:space:]]*#.*/, "", line)
+          gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", line)
+          if (line != "") print line
+        }
+        /^[[:space:]]*env_file:[[:space:]]*$/ {
+          in_env = 1
+          base = match($0, /[^[:space:]]/) - 1
+          next
+        }
+        in_env {
+          if ($0 ~ /^[[:space:]]*-/) {
+            line = $0
+            sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+            emit(line)
+            next
+          }
+          if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+          indent = match($0, /[^[:space:]]/) - 1
+          if (indent <= base) in_env = 0
+        }
+        /^[[:space:]]*env_file:[[:space:]]*[^#[:space:]]/ {
+          line = $0
+          sub(/^[[:space:]]*env_file:[[:space:]]*/, "", line)
+          emit(line)
+        }
+      ' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
+        case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
+        target="${COMPOSE_DIR}/${env_file}"
+        env_key="$(printf '%s' "$env_file" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Z0-9_]/_/g')"
+        raw_var="OCUSPOT_ENV_FILE_${env_key}"
+        b64_var="${raw_var}_B64"
+        raw_value="$(eval "printf '%s' \"\${${raw_var}:-}\"")"
+        b64_value="$(eval "printf '%s' \"\${${b64_var}:-}\"")"
+        if [ -n "$b64_value" ]; then
+          mkdir -p "$(dirname "$target")"
+          printf '%s' "$b64_value" | base64 -d > "$target"
+          echo "Created compose env_file from CI variable: ${env_file} (${b64_var})"
+          continue
+        fi
+        if [ -n "$raw_value" ]; then
+          mkdir -p "$(dirname "$target")"
+          printf '%s\n' "$raw_value" > "$target"
+          echo "Created compose env_file from CI variable: ${env_file} (${raw_var})"
+          continue
+        fi
+      if [ ! -f "$target" ]; then
+          if [ -f "${target}.example" ]; then
+            cp "${target}.example" "$target"
+          else
+            mkdir -p "$(dirname "$target")"
+            touch "$target"
+          fi
+          echo "Created temporary compose env_file placeholder: ${env_file}"
+      fi
+      done
+      docker run --rm -v "${CI_PROJECT_DIR:-$PWD}/.ocuspot/ci:/work" -w /work docker/compose:1.29.2 -f docker-compose.yml config -q
+
+sync-github:
+  stage: sync
+  image: alpine:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  before_script:
+    - apk add --no-cache git curl jq
+  script:
+    - |
+      set -e
+      git config user.email "${GITLAB_USER_EMAIL:-ocuspot-ci@users.noreply.gitlab.com}"
+      git config user.name "${GITLAB_USER_NAME:-Ocuspot CI}"
+      if ! git log -1 --pretty=%B | grep -F "Ocuspot-Mirror: gitlab-to-github" >/dev/null 2>&1; then
+      git commit --amend --no-edit --trailer "Ocuspot-Mirror: gitlab-to-github" || true
+      fi
+      SOURCE_COMMIT="$(git rev-parse HEAD)"
+      GITHUB_OWNER="Alberto-Kali"
+      GITHUB_REPO="MusicBot"
+      GITHUB_API="https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}"
+      MIRROR_BRANCH="ocuspot/mirror"
+      MIRROR_HEAD="${GITHUB_OWNER}:${MIRROR_BRANCH}"
+      DEFAULT_BRANCH="main"
+      gh_api() {
+      method="$1"
+      url="$2"
+      data="${3:-}"
+      out="$4"
+        if [ -n "$data" ]; then
+          code="$(curl -sS -o "$out" -w "%{http_code}" -X "$method" -H "Authorization: Bearer ${OCUSPOT_GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" "$url" -d "$data")"
+        else
+          code="$(curl -sS -o "$out" -w "%{http_code}" -X "$method" -H "Authorization: Bearer ${OCUSPOT_GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" "$url")"
+        fi
+        case "$code" in
+          2*) return 0 ;;
+      *) echo "GitHub API ${method} ${url} failed with HTTP ${code}"; cat "$out"; return 1 ;;
+      esac
+      }
+      ensure_github_actions_write() {
+      payload="$(jq -n '{default_workflow_permissions:"write", can_approve_pull_request_reviews:true}')"
+      gh_api PUT "${GITHUB_API}/actions/permissions/workflow" "$payload" /tmp/ocuspot-actions-permissions.json || true
+      }
+      ensure_branch_protection() {
+      branch="$1"
+      [ -n "$branch" ] || return 0
+      payload="$(jq -n '{required_status_checks:null, enforce_admins:true, required_pull_request_reviews:{required_approving_review_count:0}, restrictions:null, allow_force_pushes:false, allow_deletions:false}')"
+      gh_api PUT "${GITHUB_API}/branches/${branch}/protection" "$payload" "/tmp/ocuspot-protect-${branch//\//_}.json" || true
+      }
+      git remote remove github 2>/dev/null || true
+      git remote add github "https://oauth2:${OCUSPOT_GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git"
+      legacy_service_mirrors="$(git ls-remote --heads github 'refs/heads/ocuspot/mirror/*' | awk '{print $2}' | sed 's#^refs/heads/##' || true)"
+      if [ -n "$legacy_service_mirrors" ]; then
+      echo "$legacy_service_mirrors" | while IFS= read -r old_branch; do
+      [ -n "$old_branch" ] || continue
+      echo "Deleting obsolete GitHub service mirror branch ${old_branch}"
+      git push github ":refs/heads/${old_branch}" || true
+      done
+      fi
+      sync_protected_branch_from_ref() {
+      source_ref="$1"
+      target_branch="$2"
+      title_scope="$3"
+      [ -n "$source_ref" ] && [ -n "$target_branch" ] || return 0
+      if ! gh_api GET "${GITHUB_API}/git/ref/heads/${target_branch}" "" "/tmp/ocuspot-gh-${target_branch//\//_}.json"; then
+      echo "GitHub mirror ${target_branch} missing; bootstrapping branch before enabling protection."
+      git push github "${source_ref}:refs/heads/${target_branch}"
+      ensure_branch_protection "${target_branch}"
+      return 0
+      fi
+      ensure_branch_protection "${target_branch}"
+      branch_slug="$(printf '%s' "$target_branch" | tr '/[:upper:]' '-[:lower:]')"
+      mirror_branch="ocuspot/service-mirror/${branch_slug}"
+      mirror_head="${GITHUB_OWNER}:${mirror_branch}"
+      git fetch github "${target_branch}"
+      git checkout -B "${mirror_branch}" "github/${target_branch}"
+      git rm -r --ignore-unmatch . >/dev/null 2>&1 || true
+      git checkout "${source_ref}" -- .
+      if git diff --cached --quiet; then
+      echo "GitHub mirror ${target_branch} already matches ${source_ref}; nothing sync."
+      return 0
+      fi
+      git commit -m "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub ${target_branch}" -m "Automated Ocuspot update for ${title_scope} from GitLab primary ${CI_PROJECT_PATH}@${CI_COMMIT_SHA}." -m "Ocuspot-Mirror: gitlab-to-github"
+      remote_mirror_sha="$(git ls-remote github "refs/heads/${mirror_branch}" | awk '{print $1}')"
+      if [ -n "$remote_mirror_sha" ]; then
+      git push github "${mirror_branch}:refs/heads/${mirror_branch}" --force-with-lease="refs/heads/${mirror_branch}:${remote_mirror_sha}"
+      else
+      git push github "${mirror_branch}:refs/heads/${mirror_branch}"
+      fi
+      github_head_sha="$(git ls-remote github "refs/heads/${mirror_branch}" | awk '{print $1}')"
+      if [ -z "$github_head_sha" ]; then
+      echo "GitHub mirror branch ${mirror_branch} was not created"
+      exit 1
+      fi
+      gh_api GET "${GITHUB_API}/pulls?head=${mirror_head}&base=${target_branch}&state=open" "" "/tmp/ocuspot-prs-${branch_slug}.json"
+      pr_number="$(jq -r '.[0].number // empty' "/tmp/ocuspot-prs-${branch_slug}.json")"
+      pr_body="Automated Ocuspot update for ${title_scope} from GitLab primary ${CI_PROJECT_PATH}@${CI_COMMIT_SHA}. GitLab pipeline already passed; GitHub checks still build packages/images before merge."
+      if [ -z "$pr_number" ]; then
+      pr_create="$(jq -n --arg title "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub ${target_branch}" --arg head "$mirror_head" --arg base "$target_branch" --arg body "$pr_body" '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true}')"
+      gh_api POST "${GITHUB_API}/pulls" "$pr_create" "/tmp/ocuspot-pr-create-${branch_slug}.json"
+      pr_number="$(jq -r '.number' "/tmp/ocuspot-pr-create-${branch_slug}.json")"
+      else
+      pr_update="$(jq -n --arg title "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub ${target_branch}" --arg body "$pr_body" '{title:$title, body:$body}')"
+      gh_api PATCH "${GITHUB_API}/pulls/${pr_number}" "$pr_update" "/tmp/ocuspot-pr-update-${branch_slug}.json"
+      fi
+      echo "GitHub mirror PR #${pr_number} opened/updated from ${mirror_branch} to ${target_branch} at ${github_head_sha}. Waiting GitHub checks ..."
+      for i in $(seq 1 80); do
+      gh_api GET "${GITHUB_API}/commits/${github_head_sha}/check-runs" "" "/tmp/ocuspot-checks-${branch_slug}.json" || printf '{"total_count":0,"check_runs":[]}' > "/tmp/ocuspot-checks-${branch_slug}.json"
+      total="$(jq -r '.total_count // 0' "/tmp/ocuspot-checks-${branch_slug}.json")"
+      incomplete="$(jq -r '[.check_runs[]? | select(.status != "completed")] | length' "/tmp/ocuspot-checks-${branch_slug}.json")"
+      bad="$(jq -r '[.check_runs[]? | select(.status == "completed" and (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))] | length' "/tmp/ocuspot-checks-${branch_slug}.json")"
+      gh_api GET "${GITHUB_API}/commits/${github_head_sha}/status" "" "/tmp/ocuspot-status-${branch_slug}.json" || printf '{"state":"pending"}' > "/tmp/ocuspot-status-${branch_slug}.json"
+      state="$(jq -r '.state // "pending"' "/tmp/ocuspot-status-${branch_slug}.json")"
+      if [ "$bad" != "0" ] || [ "$state" = "failure" ] || [ "$state" = "error" ]; then echo "GitHub checks failed ${github_head_sha}"; exit 1; fi
+      if [ "$total" != "0" ] && [ "$incomplete" = "0" ] && { [ "$state" = "success" ] || [ "$state" = "pending" ]; }; then break; fi
+      if [ "$i" = "80" ]; then echo "Timed out waiting GitHub checks on ${github_head_sha}"; exit 1; fi
+      sleep 15
+      done
+      review_payload="$(jq -n '{event:"APPROVE", body:"Ocuspot auto-approval: GitLab primary pipeline passed and GitHub checks completed mirror update."}')"
+      gh_api POST "${GITHUB_API}/pulls/${pr_number}/reviews" "$review_payload" "/tmp/ocuspot-pr-review-${branch_slug}.json" || true
+      merge_payload="$(jq -n --arg sha "${github_head_sha}" --arg trailer "Ocuspot-Mirror: gitlab-to-github" --arg target "${target_branch}" '{commit_title:("sync(gitlab): mirror accepted GitLab primary for " + $target), commit_message:("Merged by Ocuspot after GitHub checks passed. GitLab pipeline was source truth automated update.\n\n" + $trailer), sha:$sha, merge_method:"squash"}')"
+      merged=0
+      for i in $(seq 1 20); do
+      if gh_api PUT "${GITHUB_API}/pulls/${pr_number}/merge" "$merge_payload" "/tmp/ocuspot-pr-merge-${branch_slug}.json"; then merged=1; break; fi
+      sleep 10
+      done
+      if [ "$merged" != "1" ]; then echo "GitHub PR #${pr_number} was not mergeable after checks. Review branch rules required approvals."; exit 1; fi
+      git push github ":refs/heads/${mirror_branch}" || true
+      }
+      ensure_github_actions_write
+      cat > /tmp/ocuspot-service-branches <<'OCUSPOT_SERVICE_BRANCHES'
+      backend
+      telegram-bot
+      telegram-webapp
+      OCUSPOT_SERVICE_BRANCHES
+      while IFS= read -r service_branch; do
+       [ -n "$service_branch" ] || continue
+      git fetch origin "${service_branch}:refs/remotes/origin/${service_branch}"
+      sync_protected_branch_from_ref "refs/remotes/origin/${service_branch}" "$service_branch" "service branch ${service_branch}"
+      done < /tmp/ocuspot-service-branches
+      if ! gh_api GET "${GITHUB_API}/git/ref/heads/${DEFAULT_BRANCH}" "" /tmp/ocuspot-gh-main.json; then
+       echo "GitHub mirror ${DEFAULT_BRANCH} missing or unavailable; trying one-time bootstrap push to create PR base branch."
+      git push github HEAD:refs/heads/${DEFAULT_BRANCH}
+      ensure_branch_protection "${DEFAULT_BRANCH}"
+      echo "GitHub mirror ${DEFAULT_BRANCH} bootstrapped. Next GitLab push will use PR/check/merge flow."
+       exit 0
+      fi
+      ensure_branch_protection "${DEFAULT_BRANCH}"
+      git fetch github "${DEFAULT_BRANCH}"
+      git checkout -B "${MIRROR_BRANCH}" "github/${DEFAULT_BRANCH}"
+      git rm -r --ignore-unmatch . >/dev/null 2>&1 || true
+      git checkout "${SOURCE_COMMIT}" -- .
+      if git diff --cached --quiet; then
+       echo "GitHub mirror ${DEFAULT_BRANCH} already matches GitLab ${CI_COMMIT_SHA}; nothing to sync."
+       exit 0
+      fi
+      git commit -m "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub" -m "Automated Ocuspot update from GitLab primary ${CI_PROJECT_PATH}@${CI_COMMIT_SHA}." -m "Ocuspot-Mirror: gitlab-to-github"
+      REMOTE_MIRROR_SHA="$(git ls-remote github "refs/heads/${MIRROR_BRANCH}" | awk '{print $1}')"
+      if [ -n "$REMOTE_MIRROR_SHA" ]; then
+       git push github "${MIRROR_BRANCH}:refs/heads/${MIRROR_BRANCH}" --force-with-lease="refs/heads/${MIRROR_BRANCH}:${REMOTE_MIRROR_SHA}"
+      else
+       git push github "${MIRROR_BRANCH}:refs/heads/${MIRROR_BRANCH}"
+      fi
+      GITHUB_HEAD_SHA="$(git ls-remote github "refs/heads/${MIRROR_BRANCH}" | awk '{print $1}')"
+      if [ -z "$GITHUB_HEAD_SHA" ]; then
+       echo "GitHub mirror branch ${MIRROR_BRANCH} was not created"
+       exit 1
+      fi
+      OLD_BRANCHES="$(git ls-remote --heads github 'refs/heads/ocuspot/mirror/*' | awk '{print $2}' | sed 's#^refs/heads/##' || true)"
+      if [ -n "$OLD_BRANCHES" ]; then
+       echo "$OLD_BRANCHES" | while IFS= read -r old_branch; do
+       [ -n "$old_branch" ] || continue
+       echo "Deleting obsolete GitHub mirror branch ${old_branch}"
+       git push github ":refs/heads/${old_branch}" || true
+       done
+      fi
+      gh_api GET "${GITHUB_API}/pulls?head=${MIRROR_HEAD}&base=${DEFAULT_BRANCH}&state=open" "" /tmp/ocuspot-prs.json
+      PR_NUMBER="$(jq -r '.[0].number // empty' /tmp/ocuspot-prs.json)"
+      PR_BODY="Automated Ocuspot update from GitLab primary ${CI_PROJECT_PATH}@${CI_COMMIT_SHA}. GitLab pipeline already passed; GitHub checks still run here to build packages/images before merge."
+      if [ -z "$PR_NUMBER" ]; then
+        PR_CREATE="$(jq -n --arg title "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub" --arg head "$MIRROR_HEAD" --arg base "$DEFAULT_BRANCH" --arg body "$PR_BODY" '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true}')"
+        gh_api POST "${GITHUB_API}/pulls" "$PR_CREATE" /tmp/ocuspot-pr-create.json
+        PR_NUMBER="$(jq -r '.number' /tmp/ocuspot-pr-create.json)"
+      else
+        PR_UPDATE="$(jq -n --arg title "sync(gitlab): ${CI_COMMIT_SHORT_SHA} -> GitHub" --arg body "$PR_BODY" '{title:$title, body:$body}')"
+        gh_api PATCH "${GITHUB_API}/pulls/${PR_NUMBER}" "$PR_UPDATE" /tmp/ocuspot-pr-update.json
+      fi
+      echo "GitHub mirror PR #${PR_NUMBER} opened/updated from ${MIRROR_BRANCH} at ${GITHUB_HEAD_SHA}. Waiting for GitHub checks ..."
+      for i in $(seq 1 80); do
+        gh_api GET "${GITHUB_API}/commits/${GITHUB_HEAD_SHA}/check-runs" "" /tmp/ocuspot-checks.json || printf '{"total_count":0,"check_runs":[]}' > /tmp/ocuspot-checks.json
+        TOTAL="$(jq -r '.total_count // 0' /tmp/ocuspot-checks.json)"
+        INCOMPLETE="$(jq -r '[.check_runs[]? | select(.status != "completed")] | length' /tmp/ocuspot-checks.json)"
+        BAD="$(jq -r '[.check_runs[]? | select(.status == "completed" and (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))] | length' /tmp/ocuspot-checks.json)"
+        gh_api GET "${GITHUB_API}/commits/${GITHUB_HEAD_SHA}/status" "" /tmp/ocuspot-status.json || printf '{"state":"pending"}' > /tmp/ocuspot-status.json
+        STATE="$(jq -r '.state // "pending"' /tmp/ocuspot-status.json)"
+        if [ "$BAD" != "0" ] || [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then echo "GitHub checks failed ${GITHUB_HEAD_SHA}"; exit 1; fi
+        if [ "$TOTAL" != "0" ] && [ "$INCOMPLETE" = "0" ] && { [ "$STATE" = "success" ] || [ "$STATE" = "pending" ]; }; then break; fi
+        if [ "$i" = "80" ]; then echo "Timed out waiting GitHub checks on ${GITHUB_HEAD_SHA}"; exit 1; fi
+        sleep 15
+      done
+      REVIEW_PAYLOAD="$(jq -n '{event:"APPROVE", body:"Ocuspot auto-approval: GitLab primary pipeline passed and GitHub checks completed for this mirror update."}')"
+      gh_api POST "${GITHUB_API}/pulls/${PR_NUMBER}/reviews" "$REVIEW_PAYLOAD" /tmp/ocuspot-pr-review.json || true
+      MERGE_PAYLOAD="$(jq -n --arg sha "${GITHUB_HEAD_SHA}" --arg trailer "Ocuspot-Mirror: gitlab-to-github" '{commit_title:"sync(gitlab): mirror accepted GitLab primary", commit_message:("Merged by Ocuspot after GitHub checks passed. GitLab pipeline was the source of truth for this automated update.\n\n" + $trailer), sha:$sha, merge_method:"squash"}')"
+      MERGED=0
+      for i in $(seq 1 20); do
+        if gh_api PUT "${GITHUB_API}/pulls/${PR_NUMBER}/merge" "$MERGE_PAYLOAD" /tmp/ocuspot-pr-merge.json; then MERGED=1; break; fi
+        sleep 10
+      done
+      if [ "$MERGED" != "1" ]; then echo "GitHub PR #${PR_NUMBER} was not mergeable after checks. Review branch rules required approvals."; exit 1; fi
+      git push github ":refs/heads/${MIRROR_BRANCH}" || true
+
+deploy-carrier:
+  stage: deploy
+  image: alpine:latest
+  needs:
+    - job: build-compose-images
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      exists:
+        - docker-compose.yml
+  before_script:
+    - apk add --no-cache ca-certificates curl jq openssh-client sshpass tar
+    - test -n "$OCUSPOT_SSH_PRIVATE_KEY" || { test -n "$OCUSPOT_CARRIER_SSH_PASSWORD" && test -n "$OCUSPOT_GATEWAY_SSH_PASSWORD"; }
+    - test -n "$OCUSPOT_GITLAB_TOKEN"
+    - test -f .ocuspot/deploy/deploy.sh
+    - test -f .ocuspot/deploy/publish-deployments.sh
+    - mkdir -p ~/.ssh
+    - |
+      if [ -n "$OCUSPOT_SSH_PRIVATE_KEY" ]; then printf '%s\n' "$OCUSPOT_SSH_PRIVATE_KEY" > ~/.ssh/ocuspot_deploy_key && chmod 600 ~/.ssh/ocuspot_deploy_key && printf 'Host *\n IdentityFile ~/.ssh/ocuspot_deploy_key\n IdentitiesOnly yes\n StrictHostKeyChecking accept-new\n' > ~/.ssh/config; else printf 'Host *\n StrictHostKeyChecking accept-new\n' > ~/.ssh/config; fi
+  script:
+    - if [ -f .ocuspot/ci/docker-compose.yml ]; then cp .ocuspot/ci/docker-compose.yml "docker-compose.yml"; fi
+    - if [ -d .ocuspot/ci ]; then find .ocuspot/ci -maxdepth 1 -type f -name '.env*' -exec cp {} . \; ; fi
+    - cp .ocuspot/ci/.env .ocuspot/ci/.env.* . 2>/dev/null || true
+    - |
+      set -e
+      COMPOSE_FILE="docker-compose.yml"
+            COMPOSE_DIR="$(dirname "$COMPOSE_FILE")"
+            awk '
+              function emit(line) {
+                sub(/[[:space:]]*#.*/, "", line)
+                gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", line)
+                if (line != "") print line
+              }
+              /^[[:space:]]*env_file:[[:space:]]*$/ {
+                in_env = 1
+                base = match($0, /[^[:space:]]/) - 1
+                next
+              }
+              in_env {
+                if ($0 ~ /^[[:space:]]*-/) {
+                  line = $0
+                  sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+                  emit(line)
+                  next
+                }
+                if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+                indent = match($0, /[^[:space:]]/) - 1
+                if (indent <= base) in_env = 0
+              }
+              /^[[:space:]]*env_file:[[:space:]]*[^#[:space:]]/ {
+                line = $0
+                sub(/^[[:space:]]*env_file:[[:space:]]*/, "", line)
+                emit(line)
+              }
+            ' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
+              case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
+              target="${COMPOSE_DIR}/${env_file}"
+              env_key="$(printf '%s' "$env_file" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Z0-9_]/_/g')"
+              raw_var="OCUSPOT_ENV_FILE_${env_key}"
+              b64_var="${raw_var}_B64"
+              raw_value="$(eval "printf '%s' \"\${${raw_var}:-}\"")"
+              b64_value="$(eval "printf '%s' \"\${${b64_var}:-}\"")"
+              if [ -n "$b64_value" ]; then
+                mkdir -p "$(dirname "$target")"
+                printf '%s' "$b64_value" | base64 -d > "$target"
+                echo "Created compose env_file from CI variable: ${env_file} (${b64_var})"
+                continue
+              fi
+              if [ -n "$raw_value" ]; then
+                mkdir -p "$(dirname "$target")"
+                printf '%s\n' "$raw_value" > "$target"
+                echo "Created compose env_file from CI variable: ${env_file} (${raw_var})"
+                continue
+              fi
+            if [ ! -f "$target" ]; then
+                if [ -f "${target}.example" ]; then
+                  cp "${target}.example" "$target"
+                else
+                  mkdir -p "$(dirname "$target")"
+                  touch "$target"
+                fi
+                echo "Created temporary compose env_file placeholder: ${env_file}"
+            fi
+            done
+    - cd .ocuspot/deploy
+    - sed "s|__OCUSPOT_IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deploy.sh > deploy.runtime.sh
+    - chmod 700 deploy.runtime.sh
+    - DEPLOY_RUNTIME=docker-compose DEPLOY_SOURCE_DIR=../.. FRP_SERVER_BIN="${FRP_SERVER_BIN:-}" FRP_CLIENT_BIN="${FRP_CLIENT_BIN:-}" ./deploy.runtime.sh
+    - chmod 700 publish-deployments.sh
+    - OCUSPOT_IMAGE_REF="${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}" ./publish-deployments.sh
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - .ocuspot/deploy/

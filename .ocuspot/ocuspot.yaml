@@ -1,0 +1,29 @@
+version: 1
+project:
+  name: "Music-Bot"
+  slug: "music-bot"
+repositories:
+  gitlab:
+    path_with_namespace: "Alberto-Genuardy/Music-Bot"
+    visibility: private
+    protected_default_branch: true
+    require_pipeline_success: true
+  github:
+    enabled: true
+    owner: "Alberto-Kali"
+    repo: "MusicBot"
+    visibility: public
+sync:
+  bidirectional: true
+  source_of_truth: gitlab
+deployment:
+  enabled: true
+  container_host: "backend-kvm"
+  gateway: "pconf-bus"
+  subdomain: "music"
+  runtime: "docker-compose"
+  architecture: "multi-branch"
+  service_port: 3123
+  compose_file: "docker-compose.yml"
+  service_dirs: ""
+  service_branches: "backend,telegram-bot,telegram-webapp"
