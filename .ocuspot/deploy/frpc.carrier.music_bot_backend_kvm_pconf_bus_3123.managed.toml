@@ -1,0 +1,11 @@
+# Ocuspot-managed frpc config for binding backend-kvm@pconf-bus
+serverAddr = "138.16.226.122"
+serverPort = 2334
+auth.method = "token"
+auth.token = "__OCUSPOT_AUTH_TOKEN__"
+
+[[proxies]]
+name = "music_bot_backend_kvm_pconf_bus_3123"
+type = "http"
+localPort = 3123
+subdomain = "music"

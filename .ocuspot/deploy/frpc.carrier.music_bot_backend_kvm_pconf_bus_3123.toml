@@ -1,0 +1,11 @@
+# Carrier frpc config for binding backend-kvm@pconf-bus
+serverAddr = "__OCUSPOT_SERVER_ADDR__"
+serverPort = 2334
+auth.method = "token"
+auth.token = "${OCUSPOT_FRP_PCONF_BUS}"
+
+[[proxies]]
+name = "music_bot_backend_kvm_pconf_bus_3123"
+type = "http"
+localPort = 3123
+subdomain = "music"

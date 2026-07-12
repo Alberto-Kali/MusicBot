@@ -1,0 +1,13 @@
+[Unit]
+Description=Ocuspot FRP gateway for pconf-bus
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/frps -c /etc/ocuspot/frp/frps.pconf-bus.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

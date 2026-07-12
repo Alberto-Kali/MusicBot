@@ -1,0 +1,13 @@
+[Unit]
+Description=Ocuspot FRP carrier for music_bot_backend_kvm_pconf_bus_3123
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/frpc -c /etc/ocuspot/frp/frpc.music_bot_backend_kvm_pconf_bus_3123.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

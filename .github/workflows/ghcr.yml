@@ -1,0 +1,49 @@
+name: Ocuspot GHCR images
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-ghcr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.OCUSPOT_GITHUB_TOKEN }}
+      - name: Build service branch GHCR images
+        shell: bash
+        run: |
+          set -euo pipefail
+          GHCR_OWNER="alberto-kali"
+          GHCR_REPO="musicbot"
+          mkdir -p .ocuspot/github-branch-src
+          for service in 'backend' 'telegram-bot' 'telegram-webapp'; do
+            git fetch origin "${service}:refs/remotes/origin/${service}"
+            service_sha="$(git rev-parse "origin/${service}")"
+            src=".ocuspot/github-branch-src/${service}"
+            rm -rf "$src"
+            mkdir -p "$src"
+            git archive "origin/${service}" | tar -x -C "$src"
+            test -f "$src/Dockerfile"
+            image="ghcr.io/${GHCR_OWNER}/${GHCR_REPO}-${service}"
+            docker build --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" -t "${image}:sha-${service_sha}" -f "$src/Dockerfile" "$src"
+            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              docker push "${image}:sha-${service_sha}"
+              docker tag "${image}:sha-${service_sha}" "${image}:${service}"
+              docker push "${image}:${service}"
+            fi
+          done

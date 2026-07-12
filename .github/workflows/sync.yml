@@ -1,0 +1,126 @@
+name: Safe bidirectional sync (GitHub -> GitLab reviewable path)
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  sync-to-gitlab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Loop guard - skip mirrored GitLab->GitHub changes
+        id: loop_guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          SKIP=0
+          HEAD_MSG="$(git log -1 --format=%B)"
+          echo "Inspecting HEAD mirror-origin markers..."
+          if printf '%s' "$HEAD_MSG" | grep -qF 'sync/github-'; then
+            echo "skip: message references sync branch prefix"
+            SKIP=1
+          fi
+          if printf '%s' "$HEAD_MSG" | grep -qF 'Ocuspot-Mirror: gitlab-to-github'; then
+            echo "skip: commit carries gitlab-to-github mirror trailer"
+            SKIP=1
+          fi
+          if printf '%s' "$HEAD_MSG" | grep -qF 'Ocuspot-Origin: from-main'; then
+            echo "skip: commit carries from-main origin marker"
+            SKIP=1
+          fi
+          if git log -15 --format=%B | grep -qF 'Ocuspot-Mirror: gitlab-to-github'; then
+            echo "skip: recent history contains gitlab-to-github mirror trailer"
+            SKIP=1
+          fi
+          if [ "$SKIP" -eq 1 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure git bot identity
+        if: steps.loop_guard.outputs.skip != 'true'
+        shell: bash
+        run: |
+          git config user.name "ocuspot-mirror[bot]"
+          git config user.email "mirror@ocuspot.invalid"
+
+      - name: Add GitHub-to-GitLab marker trailer
+        if: steps.loop_guard.outputs.skip != 'true'
+        shell: bash
+        run: |
+          git commit --amend --no-edit --trailer "Ocuspot-Mirror: github-to-gitlab" --trailer "Ocuspot-Origin: from-mirror" || true
+
+      - name: Push GitLab review branch
+        if: steps.loop_guard.outputs.skip != 'true'
+        env:
+          GL_TOKEN: ${{ secrets.OCUSPOT_GITLAB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          FULL="$(git rev-parse HEAD)"
+          BRANCH="sync/github-${FULL}"
+          echo "Using sync branch: $BRANCH"
+          git remote add gitlab "https://oauth2:${GL_TOKEN}@gitlab.com/Alberto-Genuardy/Music-Bot.git" || true
+          git fetch gitlab || true
+          git checkout -B "$BRANCH"
+          git push gitlab "$BRANCH:$BRANCH"
+
+      - name: Open or update GitLab MR
+        if: steps.loop_guard.outputs.skip != 'true'
+        env:
+          GL_TOKEN: ${{ secrets.OCUSPOT_GITLAB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          FULL="$(git rev-parse HEAD)"
+          SHORT="$(git rev-parse --short HEAD)"
+          BRANCH="sync/github-${FULL}"
+          PROJ_ENC="$(printf '%s' 'Alberto-Genuardy/Music-Bot' | sed 's|/|%2F|g')"
+          TITLE="sync(github): ${SHORT} -> GitLab (reviewable)"
+          BODY=$(cat <<'EOD'
+          This MR was automatically created by Ocuspot GitHub->GitLab sync.
+
+          GitLab is the source of truth. Review and merge this MR only when the GitHub-side change should enter GitLab.
+
+          Marker trailer: Ocuspot-Mirror: github-to-gitlab
+          Origin marker: Ocuspot-Origin: from-mirror
+          EOD
+          )
+          BODY_ESCAPED="${BODY//\"/\\\"}"
+          EXISTING="$(curl -sS -H "PRIVATE-TOKEN: ${GL_TOKEN}" "https://gitlab.com/api/v4/projects/${PROJ_ENC}/merge_requests?source_branch=${BRANCH}&state=opened")"
+          IID="$(printf '%s' "$EXISTING" | jq -r '.[0].iid // empty')"
+          if [ -n "$IID" ]; then
+            echo "Updating existing MR !${IID} for ${BRANCH}"
+            curl -sS -X PUT \
+              -H "PRIVATE-TOKEN: ${GL_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"title\": \"${TITLE}\", \"description\": \"${BODY_ESCAPED}\"}" \
+              "https://gitlab.com/api/v4/projects/${PROJ_ENC}/merge_requests/${IID}"
+          else
+            HTTP_CODE="$(curl -sS -o /tmp/ocuspot-mr.json -w '%{http_code}' -X POST \
+              -H "PRIVATE-TOKEN: ${GL_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"source_branch\": \"${BRANCH}\", \"target_branch\": \"main\", \"title\": \"${TITLE}\", \"description\": \"${BODY_ESCAPED}\"}" \
+              "https://gitlab.com/api/v4/projects/${PROJ_ENC}/merge_requests")"
+            if [ "$HTTP_CODE" = "409" ]; then
+              echo "MR already exists for ${BRANCH}; treating as success."
+            elif [ "$HTTP_CODE" -ge 400 ]; then
+              echo "MR creation failed with HTTP ${HTTP_CODE}:"
+              cat /tmp/ocuspot-mr.json
+              exit 1
+            fi
+          fi
+          echo "MR ready ${BRANCH} -> main."
+
+      - name: Summary
+        if: steps.loop_guard.outputs.skip != 'true'
+        run: echo "GitHub changes sent to GitLab through review branch and MR."
+
+      - name: Skipped summary
+        if: steps.loop_guard.outputs.skip == 'true'
+        run: echo "Skipped GitHub->GitLab sync because this push originated from GitLab mirror traffic."
