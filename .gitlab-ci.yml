@@ -95,7 +95,7 @@ validate-compose:
             touch "$target"
           fi
           echo "Created temporary compose env_file placeholder: ${env_file}"
-        fi
+      fi
       done
       mkdir -p .ocuspot/ci
       cp "$COMPOSE_FILE" .ocuspot/ci/docker-compose.yml
@@ -331,7 +331,7 @@ build-compose-images:
             touch "$target"
           fi
           echo "Created temporary compose env_file placeholder: ${env_file}"
-        fi
+      fi
       done
       docker run --rm -v "${CI_PROJECT_DIR:-$PWD}/.ocuspot/ci:/work" -w /work docker/compose:1.29.2 -f docker-compose.yml config -q
 
@@ -566,9 +566,67 @@ deploy-carrier:
     - if [ -f .ocuspot/ci/docker-compose.yml ]; then cp .ocuspot/ci/docker-compose.yml "docker-compose.yml"; fi
     - if [ -d .ocuspot/ci ]; then find .ocuspot/ci -maxdepth 1 -type f -name '.env*' -exec cp {} . \; ; fi
     - cp .ocuspot/ci/.env .ocuspot/ci/.env.* . 2>/dev/null || true
-    - if [ -n "$OCUSPOT_ENV_FILE__ENV_B64" ]; then printf '%s' "$OCUSPOT_ENV_FILE__ENV_B64" | base64 -d > .env; fi
-    - if [ -n "$OCUSPOT_ENV_FILE__ENV_SECRETS_BACKEND_B64" ]; then printf '%s' "$OCUSPOT_ENV_FILE__ENV_SECRETS_BACKEND_B64" | base64 -d > .env.secrets.backend; fi
-    - if [ -n "$OCUSPOT_ENV_FILE__ENV_SECRETS_BOT_B64" ]; then printf '%s' "$OCUSPOT_ENV_FILE__ENV_SECRETS_BOT_B64" | base64 -d > .env.secrets.bot; fi
+    - |
+      set -e
+      COMPOSE_FILE="docker-compose.yml"
+            COMPOSE_DIR="$(dirname "$COMPOSE_FILE")"
+            awk '
+              function emit(line) {
+                sub(/[[:space:]]*#.*/, "", line)
+                gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", line)
+                if (line != "") print line
+              }
+              /^[[:space:]]*env_file:[[:space:]]*$/ {
+                in_env = 1
+                base = match($0, /[^[:space:]]/) - 1
+                next
+              }
+              in_env {
+                if ($0 ~ /^[[:space:]]*-/) {
+                  line = $0
+                  sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+                  emit(line)
+                  next
+                }
+                if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+                indent = match($0, /[^[:space:]]/) - 1
+                if (indent <= base) in_env = 0
+              }
+              /^[[:space:]]*env_file:[[:space:]]*[^#[:space:]]/ {
+                line = $0
+                sub(/^[[:space:]]*env_file:[[:space:]]*/, "", line)
+                emit(line)
+              }
+            ' "$COMPOSE_FILE" | sort -u | while IFS= read -r env_file; do
+              case "$env_file" in ""|/*|*..*|*\$*) continue ;; esac
+              target="${COMPOSE_DIR}/${env_file}"
+              env_key="$(printf '%s' "$env_file" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Z0-9_]/_/g')"
+              raw_var="OCUSPOT_ENV_FILE_${env_key}"
+              b64_var="${raw_var}_B64"
+              raw_value="$(eval "printf '%s' \"\${${raw_var}:-}\"")"
+              b64_value="$(eval "printf '%s' \"\${${b64_var}:-}\"")"
+              if [ -n "$b64_value" ]; then
+                mkdir -p "$(dirname "$target")"
+                printf '%s' "$b64_value" | base64 -d > "$target"
+                echo "Created compose env_file from CI variable: ${env_file} (${b64_var})"
+                continue
+              fi
+              if [ -n "$raw_value" ]; then
+                mkdir -p "$(dirname "$target")"
+                printf '%s\n' "$raw_value" > "$target"
+                echo "Created compose env_file from CI variable: ${env_file} (${raw_var})"
+                continue
+              fi
+            if [ ! -f "$target" ]; then
+                if [ -f "${target}.example" ]; then
+                  cp "${target}.example" "$target"
+                else
+                  mkdir -p "$(dirname "$target")"
+                  touch "$target"
+                fi
+                echo "Created temporary compose env_file placeholder: ${env_file}"
+            fi
+            done
     - cd .ocuspot/deploy
     - sed "s|__OCUSPOT_IMAGE__|${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}|g" deploy.sh > deploy.runtime.sh
     - chmod 700 deploy.runtime.sh
