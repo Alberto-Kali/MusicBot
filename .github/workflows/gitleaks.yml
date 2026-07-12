@@ -19,5 +19,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/scripts/install.sh | sh -s -- -b /usr/local/bin
-          gitleaks detect --no-git --source . --redact --verbose
+          go install github.com/gitleaks/gitleaks/v8@latest
+          "$HOME/go/bin/gitleaks" detect --no-git --source . --redact --verbose
