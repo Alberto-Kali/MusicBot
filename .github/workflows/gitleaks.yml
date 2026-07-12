@@ -19,5 +19,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go install github.com/gitleaks/gitleaks/v8@latest
+          go install github.com/zricethezav/gitleaks/v8@latest
           "$HOME/go/bin/gitleaks" detect --no-git --source . --redact --verbose
