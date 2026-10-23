@@ -2,7 +2,7 @@ aiogram
 ytmusicapi
 yt-dlp-ejs
 mutagen
-SQLAlchemy
+SQLAlchemy[asyncio]
 asyncpg
 aiohttp
 Pillow
